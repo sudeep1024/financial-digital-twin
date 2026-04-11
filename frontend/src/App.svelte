@@ -1,609 +1,1187 @@
 <script>
+  import { Chart, registerables } from 'chart.js';
+  Chart.register(...registerables);
+
+  // ── API ────────────────────────────────────────────────────────────────
   const API_BASE =
     import.meta.env.VITE_API_BASE ||
     "https://financial-digital-twin-api.onrender.com";
 
-  const SUGGESTED_TICKERS = ["HDFCBANK", "RELIANCE", "TCS"];
-  const markets = ["NSE"];
-  const modes = ["internal", "dcf", "comps"];
+  const SUGGESTIONS = ["HDFCBANK", "RELIANCE", "TCS", "INFY", "ICICIBANK"];
+  const MARKETS     = ["NSE", "BSE", "NASDAQ", "NYSE"];
+  const MODES       = [
+    { value: "internal", label: "Internal (Reproducible)" },
+    { value: "demo",     label: "Demo (Live APIs)" },
+  ];
 
-  let ticker = "";
-  let market = "NSE";
-  let mode = "internal";
-
+  // ── Primary state ──────────────────────────────────────────────────────
+  let ticker  = "HDFCBANK";
+  let market  = "NSE";
+  let mode    = "internal";
   let loading = false;
-  let error = "";
-  let result = null;
-  /** null = never run, true = ran at least once */
-  let hasRun = false;
+  let error   = "";
+  let result  = null;
+  let hasRun  = false;
 
-  // Auto-uppercase + trim as user types
-  function handleTickerInput(e) {
-    ticker = e.target.value.toUpperCase().trimStart();
+  // ── Compare state ──────────────────────────────────────────────────────
+  let tickerB      = "";
+  let loadingB     = false;
+  let resultB      = null;
+  let compareError = "";
+
+  // ── Chart canvas refs ──────────────────────────────────────────────────
+  let canvasVal, canvasFcf, canvasMc, canvasCmp;
+  let chartVal, chartFcf, chartMc, chartCmp;
+
+  // ── Formatters ─────────────────────────────────────────────────────────
+  const fmtCr = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
+
+  function fmtMoney(val, unit = "") {
+    const n = Number(val ?? 0);
+    if (!Number.isFinite(n)) return "—";
+    const cr = unit === "INR Crores" ? n : n / 1e7;
+    return `₹${fmtCr.format(cr)} Cr`;
   }
 
-  function fillTicker(t) {
-    ticker = t;
-    error = "";
+  function fmtPct(val) {
+    const n = Number(val ?? 0);
+    return Number.isFinite(n) ? `${n.toFixed(2)}%` : "—";
   }
 
-  function extractApiError(body) {
+  function fmtRatio(val) {
+    const n = Number(val);
+    return Number.isFinite(n) ? n.toFixed(3) : "N/A";
+  }
+
+  function signalClass(sig) {
+    const v = String(sig ?? "").toUpperCase();
+    if (/BUY|UNDERVAL/.test(v)) return "sig-green";
+    if (/SELL|OVERVAL/.test(v)) return "sig-red";
+    return "sig-yellow";
+  }
+
+  function betterVal(a, b) {
+    const na = Number(a ?? 0), nb = Number(b ?? 0);
+    return na > nb ? "A" : nb > na ? "B" : "same";
+  }
+
+  // ── Error parsing ──────────────────────────────────────────────────────
+  function parseApiError(body) {
     try {
-      const json = JSON.parse(body);
-      // Common API shapes: { detail: "..." } or { message: "..." } or { error: "..." }
-      const raw = json.detail ?? json.message ?? json.error ?? null;
+      const j = JSON.parse(body);
+      const raw = j.detail ?? j.message ?? j.error ?? "";
       if (raw) {
-        // If the message mentions a ticker not being configured, return friendly copy
-        if (/not configured/i.test(raw) || /not found/i.test(raw) || /invalid ticker/i.test(raw)) {
+        if (/not configured|not found|invalid ticker/i.test(raw))
           return "Ticker not available. Try: HDFCBANK, RELIANCE, TCS";
-        }
         return raw;
       }
-    } catch (_) {
-      // body wasn't JSON — fall through
-    }
-    if (/not configured/i.test(body) || /not found/i.test(body)) {
-      return "Ticker not available. Try: HDFCBANK, RELIANCE, TCS";
-    }
+    } catch (_) {}
     return "Something went wrong. Please try again.";
   }
 
+  // ── API helpers ────────────────────────────────────────────────────────
+  async function fetchReport(t, m, md) {
+    const url =
+      `${API_BASE}/valuation/full-report` +
+      `?ticker=${encodeURIComponent(t)}` +
+      `&market=${encodeURIComponent(m)}` +
+      `&mode=${encodeURIComponent(md)}`;
+    console.log("[API] →", url);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(parseApiError(await res.text()));
+    return res.json();
+  }
+
   async function runValuation() {
-    const clean = ticker.trim();
-    if (!clean) {
-      error = "Please enter a ticker symbol.";
-      return;
-    }
-
-    ticker = clean; // ensure trimmed value is reflected in input
+    const t = ticker.trim().toUpperCase();
+    if (!t) { error = "Please enter a ticker symbol."; return; }
+    ticker  = t;
     loading = true;
-    error = "";
-    result = null;
-    hasRun = true;
-
+    error   = "";
+    result  = null;
+    resultB = null;
+    hasRun  = true;
     try {
-      const url =
-        `${API_BASE}/valuation/full-report` +
-        `?ticker=${encodeURIComponent(clean)}` +
-        `&market=${encodeURIComponent(market)}` +
-        `&mode=${encodeURIComponent(mode)}`;
-
-      const res = await fetch(url);
-
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(extractApiError(body));
-      }
-
-      result = await res.json();
+      result = await fetchReport(t, market, mode);
     } catch (err) {
-      // If it's a network-level error (no response), give a clean message
-      if (err.name === "TypeError") {
-        error = "Network error — could not reach the API. Check your connection.";
-      } else {
-        error = err.message || "An unexpected error occurred.";
-      }
+      error = err.name === "TypeError"
+        ? "Network error — could not reach the API. Check your connection."
+        : err.message;
     } finally {
       loading = false;
     }
   }
 
-  // ── Result rendering helpers ──────────────────────────────────────────────
-  function formatValue(val) {
-    if (val === null || val === undefined) return "—";
-    if (typeof val === "object") return JSON.stringify(val, null, 2);
-    return String(val);
+  async function runComparison() {
+    const t = tickerB.trim().toUpperCase();
+    if (!t) { compareError = "Enter a second ticker to compare."; return; }
+    tickerB      = t;
+    loadingB     = true;
+    compareError = "";
+    resultB      = null;
+    try {
+      resultB = await fetchReport(t, market, mode);
+    } catch (err) {
+      compareError = err.message;
+    } finally {
+      loadingB = false;
+    }
   }
 
-  function isPlainObject(val) {
-    return val !== null && typeof val === "object" && !Array.isArray(val);
+  // ── Chart config helpers ───────────────────────────────────────────────
+  const GRID = "rgba(255,255,255,0.05)";
+  const TICK = "#475569";
+  const TT   = { backgroundColor: "#0f1724", borderColor: "#1e2c3e", borderWidth: 1 };
+
+  function getDiv(unit) { return unit === "INR Crores" ? 1 : 1e7; }
+  function getAx(unit)  { return unit === "INR Crores" ? "₹ Crores" : "₹ Crores (from INR)"; }
+
+  function xyScales(yTitle) {
+    return {
+      x: { ticks: { color: TICK }, grid: { color: GRID } },
+      y: {
+        ticks: {
+          color: TICK,
+          callback: v => "₹" + Number(v).toLocaleString("en-IN", { maximumFractionDigits: 1 }),
+        },
+        grid: { color: GRID },
+        title: yTitle ? { display: true, text: yTitle, color: TICK, font: { size: 11 } } : { display: false },
+      },
+    };
   }
 
-  function entries(obj) {
-    return Object.entries(obj);
+  // ── Chart builders ─────────────────────────────────────────────────────
+  function buildValChart(r) {
+    chartVal?.destroy();
+    if (!canvasVal || !r?.summary) return;
+    const u = r.summary.unit || "INR", d = getDiv(u), a = getAx(u);
+    chartVal = new Chart(canvasVal, {
+      type: "bar",
+      data: {
+        labels: ["DCF", "Multiples", "Blended", "P10", "P50", "P90"],
+        datasets: [{
+          data: [
+            r.summary.dcf_value, r.summary.multiples_value, r.summary.blended_value,
+            r.summary.p10, r.summary.p50, r.summary.p90,
+          ].map(v => Number(v) / d),
+          backgroundColor: [
+            "rgba(59,130,246,0.78)", "rgba(99,102,241,0.78)", "rgba(20,184,166,0.82)",
+            "rgba(239,68,68,0.72)",  "rgba(34,197,94,0.78)",  "rgba(234,179,8,0.78)",
+          ],
+          borderRadius: 6,
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: TT },
+        scales: xyScales(a),
+      },
+    });
   }
+
+  function buildFcfChart(r) {
+    chartFcf?.destroy();
+    if (!canvasFcf || !r?.fcf_forecast?.length) return;
+    const u = r.summary?.unit || "INR", d = getDiv(u), a = getAx(u);
+    chartFcf = new Chart(canvasFcf, {
+      type: "line",
+      data: {
+        labels: r.fcf_forecast.map(p => String(p.year).slice(0, 4)),
+        datasets: [
+          {
+            label: "FCF Mean",
+            data: r.fcf_forecast.map(p => Number(p.fcf_mean) / d),
+            borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,0.1)",
+            fill: true, tension: 0.35, borderWidth: 2,
+            pointRadius: 4, pointBackgroundColor: "#22c55e",
+          },
+          {
+            label: "Upper", data: r.fcf_forecast.map(p => Number(p.fcf_upper) / d),
+            borderColor: "rgba(34,197,94,0.38)", borderDash: [5, 5],
+            tension: 0.3, borderWidth: 1.5, pointRadius: 0,
+          },
+          {
+            label: "Lower", data: r.fcf_forecast.map(p => Number(p.fcf_lower) / d),
+            borderColor: "rgba(59,130,246,0.38)", borderDash: [5, 5],
+            tension: 0.3, borderWidth: 1.5, pointRadius: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: TICK, font: { size: 11 }, boxWidth: 12 } }, tooltip: TT },
+        scales: xyScales(a),
+      },
+    });
+  }
+
+  function buildMcChart(r) {
+    chartMc?.destroy();
+    if (!canvasMc || !r?.monte_carlo?.histogram?.length) return;
+    const u = r.summary?.unit || "INR", d = getDiv(u);
+    chartMc = new Chart(canvasMc, {
+      type: "bar",
+      data: {
+        labels: r.monte_carlo.histogram.map(b => {
+          const mid = (Number(b.bin_start) + Number(b.bin_end)) / 2;
+          return (mid / d).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+        }),
+        datasets: [{
+          label: "Frequency",
+          data: r.monte_carlo.histogram.map(b => b.count),
+          backgroundColor: "rgba(20,201,151,0.55)",
+          borderColor: "rgba(20,201,151,0.9)",
+          borderWidth: 1, borderRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: TT },
+        scales: {
+          x: { ticks: { color: TICK, maxTicksLimit: 8 }, grid: { color: GRID } },
+          y: {
+            ticks: { color: TICK }, grid: { color: GRID },
+            title: { display: true, text: "Frequency", color: TICK, font: { size: 11 } },
+          },
+        },
+      },
+    });
+  }
+
+  function buildCmpChart(rA, rB) {
+    chartCmp?.destroy();
+    if (!canvasCmp || !rA?.summary || !rB?.summary) return;
+    const u = rA.summary.unit || "INR", d = getDiv(u), a = getAx(u);
+    const labels = ["DCF", "Multiples", "Blended", "P10", "P50", "P90"];
+    const extract = r => [r.summary.dcf_value, r.summary.multiples_value, r.summary.blended_value, r.summary.p10, r.summary.p50, r.summary.p90].map(v => Number(v) / d);
+    chartCmp = new Chart(canvasCmp, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: rA.ticker || ticker,  data: extract(rA), backgroundColor: "rgba(59,130,246,0.78)", borderRadius: 4 },
+          { label: rB.ticker || tickerB, data: extract(rB), backgroundColor: "rgba(234,179,8,0.78)",  borderRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: TICK, font: { size: 11 }, boxWidth: 12 } }, tooltip: TT },
+        scales: xyScales(a),
+      },
+    });
+  }
+
+  // ── Reactive chart triggers (fires when both result + canvas are ready) ─
+  $: if (result && canvasVal) buildValChart(result);
+  $: if (result && canvasFcf) buildFcfChart(result);
+  $: if (result && canvasMc)  buildMcChart(result);
+  $: if (result && resultB && canvasCmp) buildCmpChart(result, resultB);
 </script>
 
 <main>
-  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <!-- ══ HEADER ══════════════════════════════════════════════════════════ -->
   <header>
-    <div class="logo">
-      <span class="logo-icon">📈</span>
+    <div class="brand">
+      <span class="brand-icon">📈</span>
       <div>
         <h1>Financial Digital Twin</h1>
-        <p class="subtitle">AI-Powered Equity Valuation Engine</p>
+        <p class="brand-sub">AI-Powered Institutional Valuation Engine</p>
       </div>
     </div>
+    <span class="hdr-badge">Bloomberg-grade · Dark Mode</span>
   </header>
 
-  <!-- ── Controls ───────────────────────────────────────────────────────── -->
-  <section class="controls">
-    <div class="field ticker-field">
-      <label for="ticker">Ticker Symbol</label>
+  <!-- ══ CONTROLS ════════════════════════════════════════════════════════ -->
+  <section class="controls-panel">
+    <div class="field field-lg">
+      <label for="tk-in">Ticker Symbol</label>
       <input
-        id="ticker"
+        id="tk-in"
         type="text"
-        placeholder="e.g. RELIANCE"
         value={ticker}
-        on:input={handleTickerInput}
-        on:keydown={(e) => e.key === "Enter" && runValuation()}
+        on:input={e => { ticker = e.target.value.toUpperCase().trimStart(); }}
+        on:keydown={e => e.key === "Enter" && runValuation()}
+        placeholder="e.g. HDFCBANK"
         autocomplete="off"
         spellcheck="false"
       />
     </div>
-
     <div class="field">
-      <label for="market">Market</label>
-      <select id="market" bind:value={market}>
-        {#each markets as m}
-          <option value={m}>{m}</option>
-        {/each}
+      <label for="mkt-sel">Market</label>
+      <select id="mkt-sel" bind:value={market}>
+        {#each MARKETS as m}<option value={m}>{m}</option>{/each}
       </select>
     </div>
-
     <div class="field">
-      <label for="mode">Mode</label>
-      <select id="mode" bind:value={mode}>
-        {#each modes as md}
-          <option value={md}>{md}</option>
-        {/each}
+      <label for="mode-sel">Mode</label>
+      <select id="mode-sel" bind:value={mode}>
+        {#each MODES as md}<option value={md.value}>{md.label}</option>{/each}
       </select>
     </div>
-
-    <button class="run-btn" on:click={runValuation} disabled={loading}>
+    <button class="btn-primary" on:click={runValuation} disabled={loading}>
       {#if loading}
-        <span class="spinner" aria-hidden="true"></span>
-        Analyzing…
+        <span class="spin-sm" aria-hidden="true"></span> Analyzing…
       {:else}
         ▶ Run Valuation
       {/if}
     </button>
   </section>
 
-  <!-- ── Suggestions ────────────────────────────────────────────────────── -->
-  <div class="suggestions">
-    <span class="suggestions-label">Try these tickers:</span>
-    {#each SUGGESTED_TICKERS as t}
-      <button class="chip" on:click={() => fillTicker(t)}>{t}</button>
+  <!-- ══ CHIPS ═══════════════════════════════════════════════════════════ -->
+  <div class="chips-row">
+    <span class="chips-lbl">Quick pick:</span>
+    {#each SUGGESTIONS as s}
+      <button class="chip" on:click={() => { ticker = s; error = ""; }}>{s}</button>
     {/each}
   </div>
 
-  <!-- ── Error banner ───────────────────────────────────────────────────── -->
+  <!-- ══ ERROR ════════════════════════════════════════════════════════════ -->
   {#if error}
-    <div class="banner error" role="alert">
-      <span class="banner-icon">❌</span>
-      <span>{error}</span>
-    </div>
+    <div class="alert alert-err" role="alert">❌ {error}</div>
   {/if}
 
-  <!-- ── Loading state ──────────────────────────────────────────────────── -->
+  <!-- ══ LOADING ══════════════════════════════════════════════════════════ -->
   {#if loading}
     <div class="loader-wrap" aria-live="polite">
-      <div class="big-spinner"></div>
-      <p>Fetching full report for <strong>{ticker}</strong>…</p>
+      <div class="spin-lg"></div>
+      <p>Running valuation engine for <strong>{ticker}</strong>…</p>
+      <p class="muted-sm">First request may take 30–60 s while Render wakes up.</p>
     </div>
   {/if}
 
-  <!-- ── Empty state (before first run) ────────────────────────────────── -->
+  <!-- ══ EMPTY STATE ══════════════════════════════════════════════════════ -->
   {#if !hasRun && !loading}
     <div class="empty-state">
       <span class="empty-icon">🔍</span>
-      <p>Enter a ticker to begin valuation</p>
+      <p>Enter a ticker to generate an institutional-grade valuation report</p>
+      <p class="muted-sm">Powered by DCF · Monte Carlo Simulation · Peer Multiples</p>
     </div>
   {/if}
 
-  <!-- ── Success result ─────────────────────────────────────────────────── -->
+  <!-- ══════════════════ RESULT ══════════════════════════════════════════ -->
   {#if result}
-    <section class="result">
-      <div class="result-header">
-        <div class="result-title-group">
-          <span class="success-tag">✔ Valuation successful</span>
-          <h2>Report — {result.ticker ?? ticker}</h2>
+
+    <!-- Report title bar -->
+    <div class="rpt-header">
+      <div>
+        <div class="rpt-tag">✔ Valuation Complete</div>
+        <h2 class="rpt-ticker">{result.ticker ?? ticker}</h2>
+        <p class="rpt-time">Generated {new Date(result.generated_at).toLocaleString()}</p>
+      </div>
+      <span class="mode-badge">{market} · {mode}</span>
+    </div>
+
+    <!-- ── KPI Cards ─────────────────────────────────────────────────── -->
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-lbl">Blended Value</div>
+        <div class="kpi-val">{fmtMoney(result.summary?.blended_value, result.summary?.unit)}</div>
+        <div class="kpi-sub">Triangulated estimate</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">DCF Value</div>
+        <div class="kpi-val">{fmtMoney(result.summary?.dcf_value, result.summary?.unit)}</div>
+        <div class="kpi-sub">Discounted cash flow</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">P50 — Median</div>
+        <div class="kpi-val">{fmtMoney(result.summary?.p50, result.summary?.unit)}</div>
+        <div class="kpi-sub">Monte Carlo median</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">Upside to P90</div>
+        <div class="kpi-val kpi-green">{fmtPct(result.summary?.upside_to_p90_pct)}</div>
+        <div class="kpi-sub">Downside P10: {fmtPct(result.summary?.downside_to_p10_pct)}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">Confidence</div>
+        <div class="kpi-val">
+          {result.confidence?.confidence_score != null
+            ? (result.confidence.confidence_score * 100).toFixed(1) + "%"
+            : "—"}
         </div>
-        <span class="badge">{market} · {mode}</span>
+        <div class="kpi-sub">Model reliability</div>
+      </div>
+      {#if result.dynamic_wacc}
+        <div class="kpi-card">
+          <div class="kpi-lbl">Dynamic WACC</div>
+          <div class="kpi-val">{fmtPct(result.dynamic_wacc.base_wacc * 100)}</div>
+          <div class="kpi-sub">
+            β = {result.dynamic_wacc.beta?.toFixed(2) ?? "—"} ·
+            vol = {fmtPct(result.dynamic_wacc.market_volatility * 100)}
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ── AI Signal Card ────────────────────────────────────────────── -->
+    {#if result.ai_summary}
+      <div class="signal-card">
+        <div class="sig-left">
+          <div class="sig-chip {signalClass(result.ai_summary.signal)}">{result.ai_summary.signal}</div>
+          <p class="sig-insight">{result.ai_summary.investment_insight}</p>
+          <ul class="sig-list">
+            {#each result.ai_summary.explanation ?? [] as line}
+              <li>{line}</li>
+            {/each}
+          </ul>
+        </div>
+        <div class="sig-metrics">
+          {#if result.comparison_metrics}
+            <div class="sm-row">
+              <span class="sm-lbl">Market Price</span>
+              <span class="sm-val">
+                {result.comparison_metrics.market_value != null
+                  ? fmtMoney(result.comparison_metrics.market_value, result.summary?.unit)
+                  : "N/A"}
+              </span>
+            </div>
+            <div class="sm-row">
+              <span class="sm-lbl">Model vs Market</span>
+              <span class="sm-val">
+                {result.comparison_metrics.error_pct != null
+                  ? fmtPct(result.comparison_metrics.error_pct)
+                  : "N/A"}
+              </span>
+            </div>
+            <div class="sm-row">
+              <span class="sm-lbl">Label</span>
+              <span class="sm-val accent">{result.comparison_metrics.label}</span>
+            </div>
+          {/if}
+          <div class="sm-row">
+            <span class="sm-lbl">Multiples Value</span>
+            <span class="sm-val">{fmtMoney(result.summary?.multiples_value, result.summary?.unit)}</span>
+          </div>
+          <div class="sm-row">
+            <span class="sm-lbl">P10</span>
+            <span class="sm-val">{fmtMoney(result.summary?.p10, result.summary?.unit)}</span>
+          </div>
+          <div class="sm-row">
+            <span class="sm-lbl">P90</span>
+            <span class="sm-val">{fmtMoney(result.summary?.p90, result.summary?.unit)}</span>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ── Validation Warnings ───────────────────────────────────────── -->
+    {#if result.validation_diagnostics?.warnings?.length}
+      <div class="alert alert-warn">
+        <strong>⚠ Validation Warnings</strong>
+        <ul class="warn-list">
+          {#each result.validation_diagnostics.warnings as w}<li>{w}</li>{/each}
+        </ul>
+      </div>
+    {/if}
+
+    <!-- ── Charts ────────────────────────────────────────────────────── -->
+    <div class="section-title">📊 Valuation Analysis</div>
+    <div class="charts-grid">
+      <div class="chart-card chart-full">
+        <div class="chart-title">Valuation Breakdown — DCF · Multiples · Blended · P10/50/90</div>
+        <div class="chart-wrap"><canvas bind:this={canvasVal}></canvas></div>
+      </div>
+      {#if result.fcf_forecast?.length}
+        <div class="chart-card">
+          <div class="chart-title">FCF Forecast (Stochastic Projection)</div>
+          <div class="chart-wrap"><canvas bind:this={canvasFcf}></canvas></div>
+        </div>
+      {/if}
+      {#if result.monte_carlo?.histogram?.length}
+        <div class="chart-card">
+          <div class="chart-title">Monte Carlo Distribution ({result.model_inputs?.monte_carlo_inputs?.simulations?.toLocaleString() ?? "N"} simulations)</div>
+          <div class="chart-wrap"><canvas bind:this={canvasMc}></canvas></div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ── Model Inputs ───────────────────────────────────────────────── -->
+    {#if result.model_inputs}
+      <div class="section-title">⚙️ Model Inputs</div>
+      <div class="detail-grid">
+        <div class="detail-grp">
+          <div class="dg-title">DCF Inputs</div>
+          <table class="dt">
+            <tbody>
+              <tr><td>Forecast Growth Rate</td><td>{fmtPct(result.model_inputs.dcf_inputs?.forecast_growth_rate_pct)}</td></tr>
+              <tr><td>Terminal Growth Rate</td><td>{fmtPct(result.model_inputs.dcf_inputs?.terminal_growth_rate_pct)}</td></tr>
+              <tr><td>Forecast Horizon</td><td>{result.model_inputs.dcf_inputs?.forecast_horizon_years} years</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="detail-grp">
+          <div class="dg-title">WACC Breakdown</div>
+          <table class="dt">
+            <tbody>
+              <tr><td>Risk-free Rate</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.risk_free_rate * 100)}</td></tr>
+              <tr><td>Beta</td><td>{fmtRatio(result.model_inputs.wacc_breakdown?.beta)}</td></tr>
+              <tr><td>Market Risk Premium</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.market_risk_premium * 100)}</td></tr>
+              <tr><td>Cost of Equity (CAPM)</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.cost_of_equity * 100)}</td></tr>
+              <tr><td>Cost of Debt</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.cost_of_debt * 100)}</td></tr>
+              <tr><td>Tax Rate</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.tax_rate * 100)}</td></tr>
+              <tr><td>Equity / Debt Weight</td><td>{fmtPct(result.model_inputs.wacc_breakdown?.equity_weight * 100)} / {fmtPct(result.model_inputs.wacc_breakdown?.debt_weight * 100)}</td></tr>
+              <tr><td>Final WACC</td><td class="td-hi">{fmtPct(result.model_inputs.wacc_breakdown?.final_wacc * 100)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="detail-grp">
+          <div class="dg-title">Monte Carlo Inputs</div>
+          <table class="dt">
+            <tbody>
+              <tr><td>Simulations</td><td>{result.model_inputs.monte_carlo_inputs?.simulations?.toLocaleString()}</td></tr>
+              <tr><td>Growth Volatility</td><td>{fmtPct(result.model_inputs.monte_carlo_inputs?.growth_volatility * 100)}</td></tr>
+              <tr><td>WACC Volatility</td><td>{fmtPct(result.model_inputs.monte_carlo_inputs?.wacc_volatility * 100)}</td></tr>
+              <tr><td>Distribution</td><td>{result.model_inputs.monte_carlo_inputs?.distribution_assumptions}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ── Peer Multiples ─────────────────────────────────────────────── -->
+    {#if result.multiples}
+      <div class="section-title">📐 Peer Multiples</div>
+      <div class="detail-grid">
+        <div class="detail-grp detail-wide">
+          <table class="dt">
+            <tbody>
+              <tr><td>Peer Median EV / EBITDA</td><td>{fmtRatio(result.multiples.median_ev_ebitda)}</td></tr>
+              <tr><td>Peer Median P / B</td><td>{result.multiples.median_price_to_book == null ? "N/A" : fmtRatio(result.multiples.median_price_to_book)}</td></tr>
+              <tr><td>Implied Value (EV/EBITDA)</td><td>{fmtMoney(result.multiples.implied_value_ev_ebitda, result.summary?.unit)}</td></tr>
+              <tr><td>Implied Value (P/B)</td><td>{result.multiples.implied_value_price_to_book == null ? "N/A" : fmtMoney(result.multiples.implied_value_price_to_book, result.summary?.unit)}</td></tr>
+              <tr><td>Final Multiples Valuation</td><td class="td-hi">{fmtMoney(result.summary?.multiples_value, result.summary?.unit)}</td></tr>
+              <tr><td>Anchor Used</td><td>{result.multiples.selected_anchor ?? "N/A"}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ── Validation Diagnostics ────────────────────────────────────── -->
+    {#if result.validation_diagnostics}
+      <div class="section-title">🔬 Model Validation</div>
+      <div class="detail-grid">
+        <div class="detail-grp detail-wide">
+          <table class="dt">
+            <tbody>
+              <tr><td>DCF vs Multiples Deviation</td><td>{fmtPct(result.validation_diagnostics.dcf_multiples_deviation_pct)}</td></tr>
+              <tr><td>Monte Carlo Variance (std/mean)</td><td>{fmtRatio(result.validation_diagnostics.monte_carlo_variance_ratio)}</td></tr>
+              <tr><td>Probability Undervalued</td><td>{fmtPct(result.validation_diagnostics.probability_undervalued * 100)}</td></tr>
+              <tr><td>Reliability</td><td class="td-hi">{result.validation_diagnostics.reliability_label}</td></tr>
+              {#each Object.entries(result.validation_diagnostics.confidence_breakdown ?? {}) as [k, v]}
+                <tr><td>{k.replaceAll("_", " ")}</td><td>{fmtRatio(v)}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ── Performance Metrics ───────────────────────────────────────── -->
+    {#if result.performance_metrics}
+      <div class="section-title">📈 Performance Metrics</div>
+      <div class="detail-grid">
+        <div class="detail-grp detail-wide">
+          <table class="dt">
+            <tbody>
+              <tr><td>Absolute Error %</td><td>{result.performance_metrics.absolute_error_pct == null ? "N/A" : fmtPct(result.performance_metrics.absolute_error_pct)}</td></tr>
+              <tr><td>Stability (Variance Ratio)</td><td>{fmtRatio(result.performance_metrics.stability_variance_ratio)}</td></tr>
+              <tr><td>Sensitivity to WACC</td><td>{fmtPct(result.performance_metrics.wacc_sensitivity_pct)}</td></tr>
+              <tr><td>Scenario Spread (P90 − P10)</td><td>{fmtMoney(result.performance_metrics.scenario_spread, result.summary?.unit)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ══════════════ COMPANY COMPARISON ════════════════════════════════ -->
+    <div class="cmp-section">
+      <div class="section-title">⚖️ Compare with Another Ticker</div>
+      <div class="cmp-controls">
+        <div class="field field-lg">
+          <label for="tk-b">Second Ticker</label>
+          <input
+            id="tk-b"
+            type="text"
+            value={tickerB}
+            on:input={e => { tickerB = e.target.value.toUpperCase().trimStart(); compareError = ""; }}
+            on:keydown={e => e.key === "Enter" && runComparison()}
+            placeholder="e.g. RELIANCE"
+            autocomplete="off"
+          />
+        </div>
+        <button class="btn-secondary" on:click={runComparison} disabled={loadingB}>
+          {#if loadingB}
+            <span class="spin-sm" aria-hidden="true"></span> Fetching…
+          {:else}
+            ⚖️ Compare
+          {/if}
+        </button>
       </div>
 
-      <div class="cards">
-        {#each entries(result) as [key, val]}
-          <div class="card">
-            <div class="card-key">{key}</div>
-            {#if isPlainObject(val)}
-              <table class="nested-table">
-                <tbody>
-                  {#each entries(val) as [k2, v2]}
-                    <tr>
-                      <td class="nt-key">{k2}</td>
-                      <td class="nt-val">{formatValue(v2)}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            {:else if Array.isArray(val)}
-              <pre class="card-pre">{JSON.stringify(val, null, 2)}</pre>
-            {:else}
-              <div class="card-val">{formatValue(val)}</div>
-            {/if}
+      {#if compareError}
+        <div class="alert alert-err">{compareError}</div>
+      {/if}
+
+      {#if resultB}
+        <!-- Side-by-side table -->
+        <div class="cmp-tbl-wrap">
+          <table class="cmp-tbl">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="th-a">{result.ticker ?? ticker}</th>
+                <th class="th-b">{resultB.ticker ?? tickerB}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each [
+                { label: "Blended Value",  a: result.summary?.blended_value,      b: resultB.summary?.blended_value,      fmt: v => fmtMoney(v, result.summary?.unit) },
+                { label: "DCF Value",      a: result.summary?.dcf_value,          b: resultB.summary?.dcf_value,          fmt: v => fmtMoney(v, result.summary?.unit) },
+                { label: "P50 (Median)",   a: result.summary?.p50,                b: resultB.summary?.p50,                fmt: v => fmtMoney(v, result.summary?.unit) },
+                { label: "Upside (P90 %)", a: result.summary?.upside_to_p90_pct,  b: resultB.summary?.upside_to_p90_pct,  fmt: fmtPct },
+                { label: "Confidence",     a: result.confidence?.confidence_score, b: resultB.confidence?.confidence_score, fmt: v => fmtPct(v * 100) },
+              ] as row}
+                {@const win = betterVal(row.a, row.b)}
+                <tr>
+                  <td class="cmp-metric">{row.label}</td>
+                  <td class:cmp-win={win === "A"}>{row.fmt(row.a)}</td>
+                  <td class:cmp-win={win === "B"}>{row.fmt(row.b)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Comparison chart -->
+        <div class="chart-card chart-full" style="margin-top:1rem">
+          <div class="chart-title">
+            Valuation Comparison — {result.ticker ?? ticker} vs {resultB.ticker ?? tickerB}
           </div>
-        {/each}
-      </div>
-    </section>
+          <div class="chart-wrap"><canvas bind:this={canvasCmp}></canvas></div>
+        </div>
+      {/if}
+    </div>
+
   {/if}
+  <!-- ── end result ──────────────────────────────────────────────────── -->
 </main>
 
 <style>
-  :global(*) {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-
+  /* ── Global ─────────────────────────────────────────────────────────── */
+  :global(*) { box-sizing: border-box; margin: 0; padding: 0; }
   :global(body) {
-    background: #0d0f14;
-    color: #e2e8f0;
+    background: #080c12;
+    color: #dde3ec;
     font-family: "Inter", "Segoe UI", system-ui, sans-serif;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
 
   main {
-    max-width: 960px;
+    max-width: 1100px;
     margin: 0 auto;
-    padding: 2rem 1.25rem 4rem;
+    padding: 1.75rem 1.5rem 6rem;
   }
 
   /* ── Header ─────────────────────────────────────────────────────────── */
   header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 2.5rem;
-    border-bottom: 1px solid #1e2433;
     padding-bottom: 1.5rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid #10192a;
   }
 
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-  }
-
-  .logo-icon {
-    font-size: 2rem;
-    line-height: 1;
-  }
+  .brand { display: flex; align-items: center; gap: 0.85rem; }
+  .brand-icon { font-size: 2rem; line-height: 1; }
 
   h1 {
-    font-size: 1.6rem;
+    font-size: 1.55rem;
     font-weight: 700;
-    color: #f1f5f9;
-    letter-spacing: -0.02em;
+    color: #f0f4f8;
+    letter-spacing: -0.025em;
   }
 
-  .subtitle {
-    font-size: 0.8rem;
-    color: #64748b;
+  .brand-sub {
+    font-size: 0.76rem;
+    color: #3d4f63;
     margin-top: 0.2rem;
     letter-spacing: 0.02em;
   }
 
-  /* ── Controls ───────────────────────────────────────────────────────── */
-  .controls {
+  .hdr-badge {
+    font-size: 0.7rem;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    border-radius: 20px;
+    padding: 0.3rem 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
+  /* ── Controls panel ─────────────────────────────────────────────────── */
+  .controls-panel {
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
     align-items: flex-end;
-    background: #131720;
-    border: 1px solid #1e2433;
-    border-radius: 12px;
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 14px;
     padding: 1.5rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.85rem;
   }
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    flex: 1;
-    min-width: 140px;
-  }
-
-  .ticker-field {
-    flex: 2;
-  }
+  .field { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 130px; }
+  .field-lg { flex: 2; }
 
   label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #64748b;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #3d4f63;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
   }
 
-  input,
-  select {
-    background: #0d0f14;
-    border: 1px solid #1e2433;
+  input, select {
+    background: #080c12;
+    border: 1px solid #10192a;
     border-radius: 8px;
-    color: #e2e8f0;
-    font-size: 0.95rem;
+    color: #dde3ec;
+    font-size: 0.9rem;
     padding: 0.55rem 0.75rem;
     outline: none;
-    transition: border-color 0.18s;
+    transition: border-color 0.15s, box-shadow 0.15s;
     width: 100%;
   }
 
-  input::placeholder {
-    color: #3d4a5c;
-  }
-
-  input:focus,
-  select:focus {
+  input::placeholder { color: #1e2c3e; }
+  input:focus, select:focus {
     border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
+  select option { background: #0d1420; }
 
-  select option {
-    background: #131720;
-  }
-
-  .run-btn {
+  .btn-primary {
     align-self: flex-end;
-    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
     border: none;
     border-radius: 8px;
     color: #fff;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    font-weight: 600;
-    padding: 0.6rem 1.4rem;
-    transition: opacity 0.18s, transform 0.12s;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+    font-weight: 700;
+    padding: 0.6rem 1.5rem;
+    transition: opacity 0.15s, transform 0.1s;
     white-space: nowrap;
-    min-width: 148px;
+    min-width: 152px;
     justify-content: center;
+    letter-spacing: 0.02em;
   }
+  .btn-primary:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .run-btn:hover:not(:disabled) {
-    opacity: 0.88;
-    transform: translateY(-1px);
+  .btn-secondary {
+    align-self: flex-end;
+    background: #10192a;
+    border: 1px solid #1a2a3e;
+    border-radius: 8px;
+    color: #60a5fa;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+    font-weight: 700;
+    padding: 0.55rem 1.2rem;
+    transition: background 0.15s;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
   }
+  .btn-secondary:hover:not(:disabled) { background: #172235; }
+  .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .run-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  /* ── Suggestions ─────────────────────────────────────────────────────── */
-  .suggestions {
+  /* ── Chips ──────────────────────────────────────────────────────────── */
+  .chips-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.45rem;
     margin-bottom: 1.5rem;
-    padding: 0 0.25rem;
+    padding: 0 0.1rem;
   }
 
-  .suggestions-label {
-    font-size: 0.78rem;
-    color: #475569;
-    font-weight: 500;
-    margin-right: 0.15rem;
-  }
+  .chips-lbl { font-size: 0.72rem; color: #2d3a4a; font-weight: 600; margin-right: 0.1rem; }
 
   .chip {
-    background: #1a2032;
-    border: 1px solid #2a3447;
+    background: #0f1925;
+    border: 1px solid #172235;
     border-radius: 20px;
-    color: #93c5fd;
+    color: #60a5fa;
     cursor: pointer;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    padding: 0.25rem 0.75rem;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 0.22rem 0.75rem;
+    transition: background 0.14s, border-color 0.14s;
   }
+  .chip:hover { background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); }
 
-  .chip:hover {
-    background: rgba(59, 130, 246, 0.18);
-    border-color: rgba(59, 130, 246, 0.45);
-    color: #bfdbfe;
-  }
-
-  /* ── Banners ─────────────────────────────────────────────────────────── */
-  .banner {
+  /* ── Alerts ─────────────────────────────────────────────────────────── */
+  .alert {
     display: flex;
+    gap: 0.6rem;
     align-items: flex-start;
-    gap: 0.65rem;
     border-radius: 8px;
-    padding: 0.85rem 1rem;
+    padding: 0.8rem 1rem;
+    font-size: 0.87rem;
     margin-bottom: 1.25rem;
-    font-size: 0.9rem;
     line-height: 1.5;
   }
 
-  .banner-icon {
-    flex-shrink: 0;
-    font-size: 1rem;
-    line-height: 1.5;
-  }
-
-  .error {
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+  .alert-err {
+    background: rgba(239, 68, 68, 0.09);
+    border: 1px solid rgba(239, 68, 68, 0.25);
     color: #fca5a5;
   }
 
-  /* ── Loader ──────────────────────────────────────────────────────────── */
+  .alert-warn {
+    background: rgba(234, 179, 8, 0.09);
+    border: 1px solid rgba(234, 179, 8, 0.25);
+    color: #fde68a;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .warn-list { padding-left: 1.2rem; }
+  .warn-list li { margin: 0.15rem 0; }
+
+  /* ── Loader ─────────────────────────────────────────────────────────── */
   .loader-wrap {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1rem;
-    padding: 3.5rem 0;
-    color: #64748b;
+    gap: 0.85rem;
+    padding: 4.5rem 0;
+    color: #3d4f63;
     font-size: 0.9rem;
+    text-align: center;
   }
 
-  .big-spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #1e2433;
+  .spin-lg {
+    width: 42px; height: 42px;
+    border: 3px solid #10192a;
     border-top-color: #3b82f6;
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
   }
 
-  .spinner {
+  .spin-sm {
     display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    width: 13px; height: 13px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
     border-top-color: #fff;
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .muted-sm { font-size: 0.78rem; color: #243040; }
 
-  /* ── Empty state ─────────────────────────────────────────────────────── */
+  /* ── Empty state ────────────────────────────────────────────────────── */
   .empty-state {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.75rem;
-    padding: 4rem 0;
-    color: #334155;
-    font-size: 0.95rem;
+    gap: 0.65rem;
+    padding: 6rem 0;
+    color: #1e2c3e;
+    font-size: 0.92rem;
     user-select: none;
+    text-align: center;
   }
+  .empty-icon { font-size: 2.5rem; opacity: 0.35; }
 
-  .empty-icon {
-    font-size: 2.25rem;
-    opacity: 0.5;
-  }
-
-  /* ── Result ──────────────────────────────────────────────────────────── */
-  .result {
-    animation: fadeIn 0.3s ease;
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0);   }
-  }
-
-  .result-header {
+  /* ── Report header ──────────────────────────────────────────────────── */
+  .rpt-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 0.75rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
+    animation: fadeUp 0.3s ease;
   }
 
-  .result-title-group {
+  .rpt-tag {
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #4ade80;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    margin-bottom: 0.15rem;
+  }
+
+  .rpt-ticker {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #f0f4f8;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+
+  .rpt-time { font-size: 0.76rem; color: #3d4f63; margin-top: 0.25rem; }
+
+  .mode-badge {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 20px;
+    color: #60a5fa;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.3rem 0.85rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    margin-top: 0.4rem;
+  }
+
+  /* ── KPI Row ────────────────────────────────────────────────────────── */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 1.25rem;
+    animation: fadeUp 0.3s ease;
+  }
+
+  .kpi-card {
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+  }
+
+  .kpi-lbl {
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #3b82f6;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 0.4rem;
+  }
+
+  .kpi-val {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #f0f4f8;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .kpi-green { color: #4ade80; }
+  .kpi-sub { font-size: 0.68rem; color: #2d3a4a; margin-top: 0.3rem; line-height: 1.4; }
+
+  /* ── Signal card ────────────────────────────────────────────────────── */
+  .signal-card {
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 14px;
+    padding: 1.25rem 1.4rem;
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+    animation: fadeUp 0.32s ease;
+  }
+
+  .sig-left { flex: 1; min-width: 220px; }
+  .sig-metrics { flex: 0 0 220px; }
+
+  .sig-chip {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    border-radius: 6px;
+    padding: 0.28rem 0.9rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .sig-green  { background: rgba(74, 222, 128, 0.12); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
+  .sig-red    { background: rgba(239, 68, 68, 0.12);  color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+  .sig-yellow { background: rgba(234, 179, 8, 0.12);  color: #fde047; border: 1px solid rgba(234, 179, 8, 0.3); }
+
+  .sig-insight {
+    font-size: 0.86rem;
+    color: #7e9ab5;
+    line-height: 1.55;
+    margin-bottom: 0.75rem;
+  }
+
+  .sig-list {
+    padding-left: 1.1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    color: #4a607a;
+    line-height: 1.45;
   }
 
-  .success-tag {
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #4ade80;
-    letter-spacing: 0.04em;
+  .sm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.32rem 0;
+    border-bottom: 1px solid #10192a;
+    font-size: 0.8rem;
+  }
+  .sm-row:last-child { border-bottom: none; }
+  .sm-lbl { color: #3d4f63; font-size: 0.73rem; }
+  .sm-val  { color: #b8ccd8; font-weight: 600; }
+  .accent  { color: #60a5fa; }
+
+  /* ── Section titles ─────────────────────────────────────────────────── */
+  .section-title {
+    font-size: 0.76rem;
+    font-weight: 800;
     text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: #3d4f63;
+    margin: 1.85rem 0 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
-  .result-header h2 {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: #f1f5f9;
-  }
-
-  .badge {
-    background: rgba(59, 130, 246, 0.12);
-    border: 1px solid rgba(59, 130, 246, 0.28);
-    border-radius: 20px;
-    color: #93c5fd;
-    font-size: 0.74rem;
-    font-weight: 600;
-    padding: 0.3rem 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    white-space: nowrap;
-    align-self: flex-start;
-    margin-top: 0.2rem;
-  }
-
-  /* ── Cards ───────────────────────────────────────────────────────────── */
-  .cards {
+  /* ── Charts grid ────────────────────────────────────────────────────── */
+  .charts-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.9rem;
+    animation: fadeUp 0.35s ease;
   }
 
-  .card {
-    background: #131720;
-    border: 1px solid #1e2433;
-    border-radius: 10px;
+  .chart-card {
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+  }
+
+  .chart-full { grid-column: 1 / -1; }
+
+  .chart-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #3d4f63;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.75rem;
+  }
+
+  .chart-wrap { height: 280px; position: relative; }
+  .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+
+  /* ── Detail grid ────────────────────────────────────────────────────── */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 0.9rem;
+    animation: fadeUp 0.35s ease;
+  }
+
+  .detail-grp {
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 12px;
     padding: 1rem 1.1rem;
     overflow: hidden;
   }
 
-  .card-key {
-    font-size: 0.7rem;
-    font-weight: 700;
+  .detail-wide { grid-column: 1 / -1; }
+
+  .dg-title {
+    font-size: 0.68rem;
+    font-weight: 800;
     color: #3b82f6;
-    letter-spacing: 0.07em;
     text-transform: uppercase;
-    margin-bottom: 0.5rem;
+    letter-spacing: 0.07em;
+    margin-bottom: 0.65rem;
   }
 
-  .card-val {
-    font-size: 1rem;
-    color: #e2e8f0;
-    word-break: break-word;
+  .dt { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .dt td { padding: 0.3rem 0.2rem; border-bottom: 1px solid #10192a; vertical-align: middle; }
+  .dt tr:last-child td { border-bottom: none; }
+  .dt td:first-child { color: #3d4f63; font-weight: 500; width: 62%; }
+  .dt td:last-child  { color: #dde3ec; text-align: right; font-weight: 600; }
+  .td-hi { color: #60a5fa !important; }
+
+  /* ── Comparison section ─────────────────────────────────────────────── */
+  .cmp-section {
+    margin-top: 2.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid #10192a;
+    animation: fadeUp 0.4s ease;
   }
 
-  .card-pre {
-    font-size: 0.75rem;
-    color: #94a3b8;
-    white-space: pre-wrap;
-    word-break: break-word;
-    line-height: 1.55;
+  .cmp-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+    align-items: flex-end;
+    margin-bottom: 0.85rem;
   }
 
-  /* ── Nested table ────────────────────────────────────────────────────── */
-  .nested-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.82rem;
-  }
+  .cmp-tbl-wrap { overflow-x: auto; margin-bottom: 0.5rem; }
 
-  .nested-table tbody tr {
-    border-bottom: 1px solid #1e2433;
-  }
-
-  .nested-table tbody tr:last-child {
-    border-bottom: none;
-  }
-
-  .nt-key {
-    color: #64748b;
-    padding: 0.3rem 0.5rem 0.3rem 0;
-    white-space: nowrap;
-    vertical-align: top;
-    font-weight: 500;
-  }
-
-  .nt-val {
-    color: #e2e8f0;
-    padding: 0.3rem 0;
-    word-break: break-word;
+  .cmp-tbl { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  .cmp-tbl th, .cmp-tbl td {
+    padding: 0.6rem 0.9rem;
+    border: 1px solid #10192a;
     text-align: right;
+  }
+  .cmp-tbl th {
+    background: #0d1420;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #3d4f63;
+  }
+  .th-a { color: #60a5fa !important; }
+  .th-b { color: #fde047 !important; }
+  .cmp-tbl td:first-child { text-align: left; color: #3d4f63; font-weight: 500; }
+  .cmp-tbl tr:nth-child(even) td { background: rgba(13, 20, 32, 0.5); }
+  .cmp-metric { font-weight: 500; }
+  .cmp-win { color: #4ade80 !important; font-weight: 700; }
+
+  /* ── Animations ─────────────────────────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Responsive ─────────────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .charts-grid { grid-template-columns: 1fr; }
+    .chart-full { grid-column: unset; }
+    .detail-wide { grid-column: unset; }
+    .hdr-badge { display: none; }
+    .sig-metrics { flex: 1 1 100%; }
+    .rpt-ticker { font-size: 1.6rem; }
   }
 </style>
