@@ -3,6 +3,10 @@
     import.meta.env.VITE_API_BASE ||
     "https://financial-digital-twin-api.onrender.com";
 
+  const SUGGESTED_TICKERS = ["HDFCBANK", "RELIANCE", "TCS"];
+  const markets = ["NSE"];
+  const modes = ["internal", "dcf", "comps"];
+
   let ticker = "";
   let market = "NSE";
   let mode = "internal";
@@ -10,55 +14,98 @@
   let loading = false;
   let error = "";
   let result = null;
+  /** null = never run, true = ran at least once */
+  let hasRun = false;
 
-  const markets = ["NSE"];
-  const modes = ["internal", "dcf", "comps"];
+  // Auto-uppercase + trim as user types
+  function handleTickerInput(e) {
+    ticker = e.target.value.toUpperCase().trimStart();
+  }
+
+  function fillTicker(t) {
+    ticker = t;
+    error = "";
+  }
+
+  function extractApiError(body) {
+    try {
+      const json = JSON.parse(body);
+      // Common API shapes: { detail: "..." } or { message: "..." } or { error: "..." }
+      const raw = json.detail ?? json.message ?? json.error ?? null;
+      if (raw) {
+        // If the message mentions a ticker not being configured, return friendly copy
+        if (/not configured/i.test(raw) || /not found/i.test(raw) || /invalid ticker/i.test(raw)) {
+          return "Ticker not available. Try: HDFCBANK, RELIANCE, TCS";
+        }
+        return raw;
+      }
+    } catch (_) {
+      // body wasn't JSON — fall through
+    }
+    if (/not configured/i.test(body) || /not found/i.test(body)) {
+      return "Ticker not available. Try: HDFCBANK, RELIANCE, TCS";
+    }
+    return "Something went wrong. Please try again.";
+  }
 
   async function runValuation() {
-    if (!ticker.trim()) {
+    const clean = ticker.trim();
+    if (!clean) {
       error = "Please enter a ticker symbol.";
       return;
     }
+
+    ticker = clean; // ensure trimmed value is reflected in input
     loading = true;
     error = "";
     result = null;
+    hasRun = true;
 
     try {
-      const url = `${API_BASE}/valuation/full-report?ticker=${encodeURIComponent(
-        ticker.trim().toUpperCase()
-      )}&market=${encodeURIComponent(market)}&mode=${encodeURIComponent(mode)}`;
+      const url =
+        `${API_BASE}/valuation/full-report` +
+        `?ticker=${encodeURIComponent(clean)}` +
+        `&market=${encodeURIComponent(market)}` +
+        `&mode=${encodeURIComponent(mode)}`;
 
       const res = await fetch(url);
 
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(`API error ${res.status}: ${body}`);
+        throw new Error(extractApiError(body));
       }
 
       result = await res.json();
     } catch (err) {
-      error = err.message || "An unexpected error occurred.";
+      // If it's a network-level error (no response), give a clean message
+      if (err.name === "TypeError") {
+        error = "Network error — could not reach the API. Check your connection.";
+      } else {
+        error = err.message || "An unexpected error occurred.";
+      }
     } finally {
       loading = false;
     }
   }
 
+  // ── Result rendering helpers ──────────────────────────────────────────────
   function formatValue(val) {
     if (val === null || val === undefined) return "—";
     if (typeof val === "object") return JSON.stringify(val, null, 2);
     return String(val);
   }
 
-  function isObject(val) {
+  function isPlainObject(val) {
     return val !== null && typeof val === "object" && !Array.isArray(val);
   }
 
-  function flatEntries(obj) {
+  function entries(obj) {
     return Object.entries(obj);
   }
 </script>
 
 <main>
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <header>
     <div class="logo">
       <span class="logo-icon">📈</span>
@@ -69,15 +116,19 @@
     </div>
   </header>
 
+  <!-- ── Controls ───────────────────────────────────────────────────────── -->
   <section class="controls">
-    <div class="field">
+    <div class="field ticker-field">
       <label for="ticker">Ticker Symbol</label>
       <input
         id="ticker"
         type="text"
         placeholder="e.g. RELIANCE"
-        bind:value={ticker}
+        value={ticker}
+        on:input={handleTickerInput}
         on:keydown={(e) => e.key === "Enter" && runValuation()}
+        autocomplete="off"
+        spellcheck="false"
       />
     </div>
 
@@ -101,46 +152,71 @@
 
     <button class="run-btn" on:click={runValuation} disabled={loading}>
       {#if loading}
-        <span class="spinner"></span> Analysing…
+        <span class="spinner" aria-hidden="true"></span>
+        Analyzing…
       {:else}
         ▶ Run Valuation
       {/if}
     </button>
   </section>
 
+  <!-- ── Suggestions ────────────────────────────────────────────────────── -->
+  <div class="suggestions">
+    <span class="suggestions-label">Try these tickers:</span>
+    {#each SUGGESTED_TICKERS as t}
+      <button class="chip" on:click={() => fillTicker(t)}>{t}</button>
+    {/each}
+  </div>
+
+  <!-- ── Error banner ───────────────────────────────────────────────────── -->
   {#if error}
-    <div class="banner error">
-      <span>⚠</span>
+    <div class="banner error" role="alert">
+      <span class="banner-icon">❌</span>
       <span>{error}</span>
     </div>
   {/if}
 
+  <!-- ── Loading state ──────────────────────────────────────────────────── -->
   {#if loading}
-    <div class="loader-wrap">
+    <div class="loader-wrap" aria-live="polite">
       <div class="big-spinner"></div>
-      <p>Fetching full report for <strong>{ticker.toUpperCase()}</strong>…</p>
+      <p>Fetching full report for <strong>{ticker}</strong>…</p>
     </div>
   {/if}
 
+  <!-- ── Empty state (before first run) ────────────────────────────────── -->
+  {#if !hasRun && !loading}
+    <div class="empty-state">
+      <span class="empty-icon">🔍</span>
+      <p>Enter a ticker to begin valuation</p>
+    </div>
+  {/if}
+
+  <!-- ── Success result ─────────────────────────────────────────────────── -->
   {#if result}
     <section class="result">
       <div class="result-header">
-        <h2>Valuation Report — {result.ticker ?? ticker.toUpperCase()}</h2>
+        <div class="result-title-group">
+          <span class="success-tag">✔ Valuation successful</span>
+          <h2>Report — {result.ticker ?? ticker}</h2>
+        </div>
         <span class="badge">{market} · {mode}</span>
       </div>
 
       <div class="cards">
-        {#each flatEntries(result) as [key, val]}
+        {#each entries(result) as [key, val]}
           <div class="card">
             <div class="card-key">{key}</div>
-            {#if isObject(val)}
+            {#if isPlainObject(val)}
               <table class="nested-table">
-                {#each flatEntries(val) as [k2, v2]}
-                  <tr>
-                    <td class="nt-key">{k2}</td>
-                    <td class="nt-val">{formatValue(v2)}</td>
-                  </tr>
-                {/each}
+                <tbody>
+                  {#each entries(val) as [k2, v2]}
+                    <tr>
+                      <td class="nt-key">{k2}</td>
+                      <td class="nt-val">{formatValue(v2)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
               </table>
             {:else if Array.isArray(val)}
               <pre class="card-pre">{JSON.stringify(val, null, 2)}</pre>
@@ -174,6 +250,7 @@
     padding: 2rem 1.25rem 4rem;
   }
 
+  /* ── Header ─────────────────────────────────────────────────────────── */
   header {
     display: flex;
     align-items: center;
@@ -208,6 +285,7 @@
     letter-spacing: 0.02em;
   }
 
+  /* ── Controls ───────────────────────────────────────────────────────── */
   .controls {
     display: flex;
     flex-wrap: wrap;
@@ -217,7 +295,7 @@
     border: 1px solid #1e2433;
     border-radius: 12px;
     padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.75rem;
   }
 
   .field {
@@ -226,6 +304,10 @@
     gap: 0.4rem;
     flex: 1;
     min-width: 140px;
+  }
+
+  .ticker-field {
+    flex: 2;
   }
 
   label {
@@ -256,6 +338,7 @@
   input:focus,
   select:focus {
     border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
   }
 
   select option {
@@ -277,6 +360,8 @@
     padding: 0.6rem 1.4rem;
     transition: opacity 0.18s, transform 0.12s;
     white-space: nowrap;
+    min-width: 148px;
+    justify-content: center;
   }
 
   .run-btn:hover:not(:disabled) {
@@ -285,32 +370,77 @@
   }
 
   .run-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
   }
 
-  .banner {
+  /* ── Suggestions ─────────────────────────────────────────────────────── */
+  .suggestions {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    padding: 0 0.25rem;
+  }
+
+  .suggestions-label {
+    font-size: 0.78rem;
+    color: #475569;
+    font-weight: 500;
+    margin-right: 0.15rem;
+  }
+
+  .chip {
+    background: #1a2032;
+    border: 1px solid #2a3447;
+    border-radius: 20px;
+    color: #93c5fd;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 0.25rem 0.75rem;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .chip:hover {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: rgba(59, 130, 246, 0.45);
+    color: #bfdbfe;
+  }
+
+  /* ── Banners ─────────────────────────────────────────────────────────── */
+  .banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
     border-radius: 8px;
-    padding: 0.8rem 1rem;
+    padding: 0.85rem 1rem;
     margin-bottom: 1.25rem;
     font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  .banner-icon {
+    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1.5;
   }
 
   .error {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
     color: #fca5a5;
   }
 
+  /* ── Loader ──────────────────────────────────────────────────────────── */
   .loader-wrap {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 1rem;
-    padding: 3rem 0;
+    padding: 3.5rem 0;
     color: #64748b;
     font-size: 0.9rem;
   }
@@ -335,27 +465,57 @@
   }
 
   @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
   }
 
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 4rem 0;
+    color: #334155;
+    font-size: 0.95rem;
+    user-select: none;
+  }
+
+  .empty-icon {
+    font-size: 2.25rem;
+    opacity: 0.5;
+  }
+
+  /* ── Result ──────────────────────────────────────────────────────────── */
   .result {
-    animation: fadeIn 0.35s ease;
+    animation: fadeIn 0.3s ease;
   }
 
   @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(8px); }
+    from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0);   }
   }
 
   .result-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 0.75rem;
     margin-bottom: 1.25rem;
+  }
+
+  .result-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .success-tag {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #4ade80;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .result-header h2 {
@@ -365,17 +525,21 @@
   }
 
   .badge {
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.28);
     border-radius: 20px;
     color: #93c5fd;
-    font-size: 0.75rem;
+    font-size: 0.74rem;
     font-weight: 600;
     padding: 0.3rem 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    white-space: nowrap;
+    align-self: flex-start;
+    margin-top: 0.2rem;
   }
 
+  /* ── Cards ───────────────────────────────────────────────────────────── */
   .cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -391,7 +555,7 @@
   }
 
   .card-key {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 700;
     color: #3b82f6;
     letter-spacing: 0.07em;
@@ -413,17 +577,18 @@
     line-height: 1.55;
   }
 
+  /* ── Nested table ────────────────────────────────────────────────────── */
   .nested-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.82rem;
   }
 
-  .nested-table tr {
+  .nested-table tbody tr {
     border-bottom: 1px solid #1e2433;
   }
 
-  .nested-table tr:last-child {
+  .nested-table tbody tr:last-child {
     border-bottom: none;
   }
 
