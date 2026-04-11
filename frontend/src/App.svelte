@@ -105,17 +105,33 @@
     return mean + std * (Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2));
   }
 
-  function simDCF(baseFCF, growthRate, termGrowth, wacc, horizon) {
-    // Discount projected FCFs + Gordon Growth terminal value
-    let dcf = 0, fcf = baseFCF;
-    const safeWacc   = Math.max(0.02, wacc);
-    const safeTerm   = Math.min(termGrowth, safeWacc - 0.005);
+  function simDCF(baseFCF, baseGrowth, termGrowth, baseWacc, horizon) {
+    // ── 1. Year-by-year DCF with decaying growth + stochastic discount rate ──
+    let dcf = 0;
+    let fcf = baseFCF;
+    let cumDiscount = 1;   // tracks ∏ 1/(1+r_t) to avoid repeated Math.pow
+    let lastRate    = baseWacc;
+
     for (let t = 1; t <= horizon; t++) {
-      fcf *= (1 + growthRate);
-      dcf += fcf / Math.pow(1 + safeWacc, t);
+      // Exponentially decaying growth (mean-reverts toward terminal growth)
+      const g_t = baseGrowth * Math.exp(-0.15 * t);
+      fcf *= (1 + g_t);
+
+      // Year-varying discount rate: sampled base + small annual noise
+      const r_t = Math.max(0.02, baseWacc + Math.random() * 0.02);
+      cumDiscount /= (1 + r_t);
+      lastRate = r_t;
+
+      dcf += fcf * cumDiscount;
     }
-    const tv = (fcf * (1 + safeTerm)) / (safeWacc - safeTerm);
-    return dcf + tv / Math.pow(1 + safeWacc, horizon);
+
+    // ── 2. Terminal value with Gordon Growth model + safety cap ──────────
+    //    Ensure discount rate strictly exceeds terminal growth
+    const safeTermGrowth = lastRate <= termGrowth ? lastRate - 0.01 : termGrowth;
+    const rawTV = (fcf * (1 + safeTermGrowth)) / (lastRate - safeTermGrowth);
+    const tv    = Math.min(rawTV, 25 * fcf);   // cap at 25× terminal FCF
+
+    return dcf + tv * cumDiscount;
   }
 
   function makeBins(values, numBins = 30) {
@@ -148,8 +164,10 @@
 
     const results = [];
     for (let i = 0; i < n; i++) {
-      const g   = boxMuller(baseGrowth, growthVol);
-      const w   = boxMuller(baseWacc,   waccVol);
+      // Sample initial growth and base WACC from normal distributions
+      const g = boxMuller(baseGrowth, growthVol);
+      const w = Math.max(0.03, boxMuller(baseWacc, waccVol));
+      // simDCF applies per-year decay + noise internally
       const val = simDCF(baseFCF, g, termGrowth, w, horizon);
       if (Number.isFinite(val) && val > 0) results.push(val);
     }
