@@ -1,7 +1,7 @@
 <script>
   export let ticker = 'HDFCBANK.NS';
 
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+  const API_BASE = import.meta.env.VITE_API_BASE || 'https://financial-digital-twin-api.onrender.com';
   let loading = false;
   let error = '';
   let companyNews = [];

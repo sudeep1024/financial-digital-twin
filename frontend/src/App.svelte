@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import MonteCarlo
+  import MonteCarloHistogram from './components/MonteCarloHistogram.svelte';
   import FCFForecastChart from './components/FCFForecastChart.svelte';
   import ValuationComparisonChart from './components/ValuationComparisonChart.svelte';
   import NewsFeed from './components/NewsFeed.svelte';
@@ -181,69 +181,7 @@ async function fetchReport(ticker = tickerInput, selectedMarket = market) {
     if (error.includes('timeout') || error.includes('ECONNRESET')) {
       error += ' Tip: Render backend sleeps; first request wakes it (30-60s).';
     }
-
-      const payload = await parseResponseBody(response);
-      if (!response.ok) {
-        const detail = payload.detail || 'Failed to load valuation report.';
-        const fallbackEligible =
-          mode === 'internal' &&
-          (detail.includes('does not have full reproducible pipeline artifacts') ||
-            detail.includes('not configured in internal reproducible dataset'));
-
-        const demoUnavailable =
-          mode === 'demo' &&
-          (detail.toLowerCase().includes('demo mode unavailable') ||
-            detail.toLowerCase().includes('yfinance') ||
-            detail.toLowerCase().includes('missing dependency') ||
-            detail.toLowerCase().includes('live data fetch failed') ||
-            detail.toLowerCase().includes('failed to connect') ||
-            detail.toLowerCase().includes('curl'));
-
-        if (fallbackEligible) {
-          mode = 'demo';
-          notice = `Internal reproducible artifacts are unavailable for ${ticker.toUpperCase()} (${selectedMarket}). Switched to Demo mode automatically.`;
-
-          const demoUrl = `${API_BASE}/valuation/full-report?ticker=${encodeURIComponent(
-            ticker
-          )}&market=${encodeURIComponent(selectedMarket)}&mode=demo`;
-          const demoResponse = await fetch(demoUrl);
-          const demoPayload = await demoResponse.json();
-          if (!demoResponse.ok) {
-            throw new Error(demoPayload.detail || detail);
-          }
-          report = demoPayload;
-          activeTicker = demoPayload.ticker || ticker.toUpperCase();
-          comparisonMode = true;
-          return;
-        }
-
-        if (demoUnavailable) {
-          mode = 'internal';
-          notice = `Demo mode is unavailable on this setup for ${ticker.toUpperCase()}. Switched to Internal mode automatically.`;
-          const internalUrl = `${API_BASE}/valuation/full-report?ticker=${encodeURIComponent(
-            ticker
-          )}&market=${encodeURIComponent(selectedMarket)}&mode=internal`;
-          const internalResponse = await fetch(internalUrl);
-          const internalPayload = await parseResponseBody(internalResponse);
-          if (!internalResponse.ok) {
-            throw new Error(internalPayload.detail || detail);
-          }
-          report = internalPayload;
-          activeTicker = internalPayload.ticker || ticker.toUpperCase();
-          comparisonMode = true;
-          return;
-        }
-
-        throw new Error(detail);
-      }
-      report = payload;
-      activeTicker = payload.ticker || ticker.toUpperCase();
-      comparisonMode = true;
-    } catch (err) {
-      error = err.message || 'Unexpected error.';
-    } finally {
-      loading = false;
-    }
+    loading = false;
   }
 
   async function fetchManualReport() {
