@@ -1,11 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import MonteCarloHistogram from './components/MonteCarloHistogram.svelte';
+  import MonteCarlo
   import FCFForecastChart from './components/FCFForecastChart.svelte';
   import ValuationComparisonChart from './components/ValuationComparisonChart.svelte';
   import NewsFeed from './components/NewsFeed.svelte';
 
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+  const API_BASE = import.meta.env.VITE_API_BASE || "https://financial-digital-twin-api.onrender.com";
 
   let valuationEntryMode = 'ticker';
   let tickerInput = 'HDFCBANK';
@@ -98,9 +98,10 @@
     tickerLoading = true;
     tickerError = '';
     try {
-      const response = await fetch(
-        `${API_BASE}/market/tickers?market=${encodeURIComponent(selectedMarket)}&limit=20000&mode=${encodeURIComponent(mode)}`
-      );
+      const url = `${API_BASE}/market/tickers?market=${encodeURIComponent(selectedMarket)}&limit=20000&mode=${encodeURIComponent(mode)}`;
+      console.log("[TICKERS] Calling:", url);
+      const response = await fetch(url);
+
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload.detail || 'Failed to load ticker universe.');
@@ -114,17 +115,73 @@
     }
   }
 
-  async function fetchReport(ticker = tickerInput, selectedMarket = market) {
+async function fetchReport(ticker = tickerInput, selectedMarket = market) {
     loading = true;
     error = '';
     notice = '';
     manualWarning = '';
     report = null;
-    try {
-      const url = `${API_BASE}/valuation/full-report?ticker=${encodeURIComponent(
-        ticker
-      )}&market=${encodeURIComponent(selectedMarket)}&mode=${encodeURIComponent(mode)}`;
-      const response = await fetch(url);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout for cold starts
+    
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const url = `${API_BASE}/valuation/full-report?ticker=${encodeURIComponent(
+          ticker
+        )}&market=${encodeURIComponent(selectedMarket)}&mode=${encodeURIComponent(mode)}`;
+        
+        console.log(`[API ${attempt}] API_BASE:`, API_BASE);
+        console.log(`[API ${attempt}] Calling:`, url);
+        
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        console.log(`[API ${attempt}] Response status:`, response.status, response.statusText);
+        console.log(`[API ${attempt}] Response headers:`, [...response.headers.entries()]);
+        
+        const payload = await parseResponseBody(response);
+        if (!response.ok) {
+          console.error(`[API ${attempt}] Server error:`, response.status, payload);
+          
+          // Retry on 5xx (server errors, cold starts)
+          if (attempt === 1 && response.status >= 500) {
+            console.log(`[API ${attempt}] Retrying due to 5xx... (Render cold start?)`);
+            await new Promise(resolve => setTimeout(resolve, 10000)); // 10s delay
+            continue;
+          }
+          
+          const detail = payload.detail || `HTTP ${response.status}`;
+          throw new Error(detail);
+        }
+        
+        report = payload;
+        activeTicker = payload.ticker || ticker.toUpperCase();
+        comparisonMode = true;
+        return; // Success
+        
+      } catch (err) {
+        console.error(`[API ${attempt}] Fetch failed:`, err.message, {url, attempt});
+        lastError = err;
+        
+        if (err.name === 'AbortError') {
+          error = 'Request timeout (45s). Backend may be waking from sleep (Render free tier). Try again in 30-60s.';
+          break;
+        }
+        if (attempt === 2) break;
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+    
+    // Final error
+    error = lastError?.message || 'Failed after retries.';
+    if (error.includes('timeout') || error.includes('ECONNRESET')) {
+      error += ' Tip: Render backend sleeps; first request wakes it (30-60s).';
+    }
+
       const payload = await parseResponseBody(response);
       if (!response.ok) {
         const detail = payload.detail || 'Failed to load valuation report.';
@@ -216,11 +273,14 @@
 
       loading = true;
 
-      const response = await fetch(`${API_BASE}/valuation/manual`, {
+      const url = `${API_BASE}/valuation/manual`;
+      console.log("[MANUAL] Calling:", url, payload);
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || 'Failed to run manual valuation.');
