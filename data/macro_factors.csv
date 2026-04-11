@@ -1,0 +1,4 @@
+scenario,weight,volatility_multiplier,macro_spread_adjustment,capital_structure_adjustment
+bull,0.2,0.8,-0.005,-0.002
+base,0.6,1.0,0.0,0.0
+bear,0.2,1.25,0.007,0.003

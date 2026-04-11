@@ -1,0 +1,2 @@
+ticker,beta,risk_free_rate,market_premium,cost_of_debt,tax_rate,equity_weight,debt_weight,wacc
+HDFCBANK.NS,1.0370923438306952,0.07,0.06,0.08,0.25,0.7,0.3,0.1105578784408892

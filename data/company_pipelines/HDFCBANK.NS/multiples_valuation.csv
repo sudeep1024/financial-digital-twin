@@ -1,0 +1,2 @@
+target_ticker,peer_count,median_ev_ebitda,implied_enterprise_value_ev_ebitda,implied_value_ev_ebitda,median_price_to_book,implied_value_price_to_book,selected_anchor,median_pe,implied_value_pe
+HDFCBANK.NS,3,8.0,16800000000000.0,8300000000000.0,1.9798106500000001,11190992943016.5,price_to_book,15.6175985,10769235222355.367

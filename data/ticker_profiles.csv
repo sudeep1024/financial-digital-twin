@@ -1,0 +1,6 @@
+ticker,symbol,market,name,sector,full_pipeline_available,price_file,market_price_file
+HDFCBANK.NS,HDFCBANK,NSE,HDFC Bank Limited,Financials,1,data/prices/HDFCBANK_prices.csv,data/prices/NIFTY_prices.csv
+ICICIBANK.NS,ICICIBANK,NSE,ICICI Bank Limited,Financials,0,,
+AXISBANK.NS,AXISBANK,NSE,Axis Bank Limited,Financials,0,,
+KOTAKBANK.NS,KOTAKBANK,NSE,Kotak Mahindra Bank Limited,Financials,0,,
+SBIN.NS,SBIN,NSE,State Bank of India,Financials,0,,

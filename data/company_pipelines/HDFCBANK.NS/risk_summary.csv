@@ -1,0 +1,9 @@
+metric,value
+Base DCF Value,14897369598457.045
+P10 (Bear Case),10929412604615.441
+P50 (Median),14878059864244.48
+P90 (Bull Case),19401392514658.574
+Blended Triangulated Value,13176349854012.64
+Upside to P90 (%),30.23367908297061
+Downside to P10 (%),-26.635285965198673
+Probability Undervalued,0.4978

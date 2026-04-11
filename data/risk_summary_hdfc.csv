@@ -1,0 +1,9 @@
+metric,value
+Base DCF Value,20191294588966.17
+P10 (Bear Case),16883315942586.523
+P50 (Median),20185952992355.207
+P90 (Bull Case),24920640148026.254
+Upside to P90 (%),23.422696044683057
+Downside to P10 (%),-16.38319242881703
+Probability Undervalued,0.4993
+Probability Overvalued,0.5007

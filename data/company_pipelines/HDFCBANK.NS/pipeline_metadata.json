@@ -1,0 +1,17 @@
+{
+  "ticker": "HDFCBANK.NS",
+  "market": "NSE",
+  "generated_at": "2026-04-08T16:11:13.426382+00:00",
+  "mode": "internal",
+  "reproducibility_tag": "HDFCBANK.NS::internal::v1",
+  "source_files": [
+    "data/final_forecast_fcf.csv",
+    "data/wacc_hdfc.csv",
+    "data/dcf_hdfc.csv",
+    "data/peer_ev_ebitda.csv",
+    "data/peer_group_hdfc.csv",
+    "data/fundamentals/*.csv",
+    "data/prices/*.csv",
+    "data/macro_factors.csv"
+  ]
+}

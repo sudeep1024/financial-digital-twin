@@ -1,0 +1,146 @@
+{
+  "ticker": "HDFCBANK.NS",
+  "generated_at": "2026-04-08 16:11:13.392922+00:00",
+  "mode": "internal",
+  "digital_twin": {
+    "fcf_model": {
+      "method": "artifact_forecast_with_ml_fallback",
+      "horizon_years": 5,
+      "forecast": [
+        {
+          "year": "2025-12-31",
+          "fcf_mean": 1183937959809.7898,
+          "fcf_upper": 1444257994558.2346,
+          "fcf_lower": 923617925061.3448
+        },
+        {
+          "year": "2026-12-31",
+          "fcf_mean": 1321301383311.1355,
+          "fcf_upper": 1695406339775.698,
+          "fcf_lower": 947196426846.573
+        },
+        {
+          "year": "2027-12-31",
+          "fcf_mean": 1464501708535.4082,
+          "fcf_upper": 1946763211629.7437,
+          "fcf_lower": 982240205441.073
+        },
+        {
+          "year": "2028-12-31",
+          "fcf_mean": 1586764008218.6223,
+          "fcf_upper": 2199054339213.3496,
+          "fcf_lower": 974473677223.8951
+        },
+        {
+          "year": "2029-12-31",
+          "fcf_mean": 1710961651750.5825,
+          "fcf_upper": 2450639767513.952,
+          "fcf_lower": 971283535987.2136
+        }
+      ]
+    },
+    "wacc_model": {
+      "formula": "WACC_t = base_wacc * (1 + alpha*volatility + beta_macro*macro_score + gamma*leverage_change)",
+      "parameters": {
+        "alpha": 0.35,
+        "beta_macro": 0.55,
+        "gamma": 0.4
+      },
+      "inputs": {
+        "base_wacc_input": 0.1105578784408892,
+        "volatility": 0.11969600167172731,
+        "macro_score": 0.2,
+        "leverage_change": 0.14
+      },
+      "decomposition": {
+        "multiplicative_factor": 1.2078936005851046,
+        "volatility_contribution": 0.04189360058510456,
+        "macro_contribution": 0.11000000000000001,
+        "leverage_contribution": 0.05600000000000001,
+        "base_equation_wacc": 0.13354215386301596
+      },
+      "scenarios": [
+        {
+          "scenario": "bull",
+          "weight": 0.2,
+          "initial_wacc": 0.12036600741157759,
+          "path": [
+            0.11536600741157758,
+            0.11793362205672142,
+            0.12050123670186526,
+            0.1230688513470091,
+            0.12563646599215295
+          ]
+        },
+        {
+          "scenario": "base",
+          "weight": 0.6,
+          "initial_wacc": 0.13354215386301596,
+          "path": [
+            0.13354215386301596,
+            0.13354215386301596,
+            0.13354215386301596,
+            0.13354215386301596,
+            0.13354215386301596
+          ]
+        },
+        {
+          "scenario": "bear",
+          "weight": 0.2,
+          "initial_wacc": 0.15611513181725098,
+          "path": [
+            0.16311513181725099,
+            0.1591078340218275,
+            0.155100536226404,
+            0.15109323843098046,
+            0.14708594063555697
+          ]
+        }
+      ],
+      "time_varying_wacc": [
+        {
+          "year": "2025",
+          "wacc": 0.1358215201635753
+        },
+        {
+          "year": "2026",
+          "wacc": 0.13553358353351935
+        },
+        {
+          "year": "2027",
+          "wacc": 0.1352456469034634
+        },
+        {
+          "year": "2028",
+          "wacc": 0.13495771027340747
+        },
+        {
+          "year": "2029",
+          "wacc": 0.13466977364335156
+        }
+      ]
+    },
+    "risk_engine": {
+      "iterations": 10000,
+      "distribution": {
+        "p10": 10929412604615.441,
+        "p50": 14878059864244.48,
+        "p90": 19401392514658.574,
+        "mean": 15038042980660.588,
+        "std_dev": 3308365561026.7446
+      },
+      "probability_undervalued": 0.4978
+    },
+    "valuation_engine": {
+      "dcf_value": 14897369598457.045,
+      "multiples_value": 11190992943016.5,
+      "blended_value": 13176349854012.64,
+      "triangulation_weights": {
+        "dcf": 0.3630989559000687,
+        "mc_p50": 0.17346455350484322,
+        "multiples": 0.4634364905950881
+      },
+      "confidence_score": 0.6741623089057689
+    }
+  }
+}
