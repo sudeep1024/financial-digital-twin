@@ -10,8 +10,9 @@
   const SUGGESTIONS = ["HDFCBANK", "RELIANCE", "TCS", "INFY", "ICICIBANK"];
   const MARKETS     = ["NSE", "BSE", "NASDAQ", "NYSE"];
   const MODES       = [
-    { value: "internal", label: "Internal (Reproducible)" },
-    { value: "demo",     label: "Demo (Live APIs)" },
+    { value: "internal",   label: "Internal (Reproducible)" },
+    { value: "demo",       label: "Demo (Live APIs)" },
+    { value: "simulation", label: "AI Probabilistic Simulation" },
   ];
 
   // ── Primary state ──────────────────────────────────────────────────────
@@ -29,9 +30,13 @@
   let resultB      = null;
   let compareError = "";
 
+  // ── Simulation state ───────────────────────────────────────────────────
+  let simStats  = null;  // { mean, median, p5, p95, unit, count }
+  let simBins   = [];    // [{ mid, count }] for histogram
+
   // ── Chart canvas refs ──────────────────────────────────────────────────
-  let canvasVal, canvasFcf, canvasMc, canvasCmp;
-  let chartVal, chartFcf, chartMc, chartCmp;
+  let canvasVal, canvasFcf, canvasMc, canvasCmp, canvasSim;
+  let chartVal, chartFcf, chartMc, chartCmp, chartSim;
 
   // ── Formatters ─────────────────────────────────────────────────────────
   const fmtCr = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
@@ -92,6 +97,111 @@
     return res.json();
   }
 
+  // ── Monte Carlo helpers ────────────────────────────────────────────────
+  function boxMuller(mean, std) {
+    // Box-Muller transform: uniform → normal distribution
+    const u1 = Math.max(1e-10, Math.random());
+    const u2 = Math.random();
+    return mean + std * (Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2));
+  }
+
+  function simDCF(baseFCF, growthRate, termGrowth, wacc, horizon) {
+    // Discount projected FCFs + Gordon Growth terminal value
+    let dcf = 0, fcf = baseFCF;
+    const safeWacc   = Math.max(0.02, wacc);
+    const safeTerm   = Math.min(termGrowth, safeWacc - 0.005);
+    for (let t = 1; t <= horizon; t++) {
+      fcf *= (1 + growthRate);
+      dcf += fcf / Math.pow(1 + safeWacc, t);
+    }
+    const tv = (fcf * (1 + safeTerm)) / (safeWacc - safeTerm);
+    return dcf + tv / Math.pow(1 + safeWacc, horizon);
+  }
+
+  function makeBins(values, numBins = 30) {
+    const mn = Math.min(...values), mx = Math.max(...values);
+    const step = (mx - mn) / numBins || 1;
+    const bins = Array.from({ length: numBins }, (_, i) => ({
+      mid: mn + (i + 0.5) * step, count: 0,
+    }));
+    values.forEach(v => {
+      const idx = Math.min(numBins - 1, Math.floor((v - mn) / step));
+      bins[idx].count++;
+    });
+    return bins;
+  }
+
+  function runMonteCarlo(baseReport, n = 1000) {
+    const dcfIn  = baseReport.model_inputs?.dcf_inputs ?? {};
+    const waccIn = baseReport.model_inputs?.wacc_breakdown ?? {};
+    const mcIn   = baseReport.model_inputs?.monte_carlo_inputs ?? {};
+
+    const baseGrowth = (dcfIn.forecast_growth_rate_pct ?? 8) / 100;
+    const termGrowth = (dcfIn.terminal_growth_rate_pct ?? 3)  / 100;
+    const horizon    = dcfIn.forecast_horizon_years ?? 5;
+    const baseWacc   = waccIn.final_wacc ?? 0.10;
+    const growthVol  = mcIn.growth_volatility ?? 0.04;
+    const waccVol    = mcIn.wacc_volatility   ?? 0.015;
+
+    // Base FCF: take the first forecast year's mean value
+    const baseFCF = Number(baseReport.fcf_forecast?.[0]?.fcf_mean ?? 1);
+
+    const results = [];
+    for (let i = 0; i < n; i++) {
+      const g   = boxMuller(baseGrowth, growthVol);
+      const w   = boxMuller(baseWacc,   waccVol);
+      const val = simDCF(baseFCF, g, termGrowth, w, horizon);
+      if (Number.isFinite(val) && val > 0) results.push(val);
+    }
+
+    results.sort((a, b) => a - b);
+    const pct = (p) => results[Math.max(0, Math.ceil(p / 100 * results.length) - 1)];
+    const mean = results.reduce((s, v) => s + v, 0) / results.length;
+
+    return {
+      stats: {
+        mean, median: pct(50), p5: pct(5), p95: pct(95),
+        unit: baseReport.summary?.unit || "INR",
+        count: results.length,
+      },
+      bins: makeBins(results),
+    };
+  }
+
+  // ── Simulation chart ───────────────────────────────────────────────────
+  function buildSimChart(bins, unit) {
+    chartSim?.destroy();
+    if (!canvasSim || !bins?.length) return;
+    const d = getDiv(unit);
+    chartSim = new Chart(canvasSim, {
+      type: "bar",
+      data: {
+        labels: bins.map(b =>
+          (b.mid / d).toLocaleString("en-IN", { maximumFractionDigits: 1 })
+        ),
+        datasets: [{
+          label: "Simulations",
+          data: bins.map(b => b.count),
+          backgroundColor: "rgba(139,92,246,0.55)",
+          borderColor:     "rgba(139,92,246,0.9)",
+          borderWidth: 1,
+          borderRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: TT },
+        scales: {
+          x: { ticks: { color: TICK, maxTicksLimit: 10 }, grid: { color: GRID } },
+          y: {
+            ticks: { color: TICK }, grid: { color: GRID },
+            title: { display: true, text: "Frequency", color: TICK, font: { size: 11 } },
+          },
+        },
+      },
+    });
+  }
+
   async function runValuation() {
     const t = ticker.trim().toUpperCase();
     if (!t) { error = "Please enter a ticker symbol."; return; }
@@ -100,7 +210,30 @@
     error   = "";
     result  = null;
     resultB = null;
+    simStats = null;
+    simBins  = [];
     hasRun  = true;
+
+    // ── Simulation mode: run client-side Monte Carlo ────────────────────
+    if (mode === "simulation") {
+      try {
+        // Fetch base internal report for parameters
+        const base = await fetchReport(t, market, "internal");
+        result = base; // show base report data alongside sim
+        const { stats, bins } = runMonteCarlo(base, 1000);
+        simStats = stats;
+        simBins  = bins;
+      } catch (err) {
+        error = err.name === "TypeError"
+          ? "Network error — could not reach the API. Check your connection."
+          : err.message;
+      } finally {
+        loading = false;
+      }
+      return;
+    }
+
+    // ── Normal mode: call API directly ─────────────────────────────────
     try {
       result = await fetchReport(t, market, mode);
     } catch (err) {
@@ -277,6 +410,7 @@
   $: if (result && canvasFcf) buildFcfChart(result);
   $: if (result && canvasMc)  buildMcChart(result);
   $: if (result && resultB && canvasCmp) buildCmpChart(result, resultB);
+  $: if (simBins.length && canvasSim) buildSimChart(simBins, simStats?.unit || "INR");
 </script>
 
 <main>
@@ -664,6 +798,64 @@
         </div>
       {/if}
     </div>
+
+    <!-- ══════════ AI PROBABILISTIC SIMULATION RESULTS ═══════════════════ -->
+    {#if simStats}
+      <div class="sim-section">
+        <div class="sim-banner">
+          <span class="sim-icon">🎲</span>
+          <div>
+            <div class="sim-title">AI Probabilistic Valuation Mode</div>
+            <div class="sim-sub">
+              {simStats.count.toLocaleString()} Monte Carlo simulations · randomised growth & discount rate
+            </div>
+          </div>
+        </div>
+
+        <!-- Sim KPI cards -->
+        <div class="sim-kpi-row">
+          <div class="sim-kpi-card">
+            <div class="sim-kpi-lbl">Mean Valuation</div>
+            <div class="sim-kpi-val">{fmtMoney(simStats.mean, simStats.unit)}</div>
+            <div class="sim-kpi-sub">Expected value across {simStats.count} runs</div>
+          </div>
+          <div class="sim-kpi-card">
+            <div class="sim-kpi-lbl">Median (P50)</div>
+            <div class="sim-kpi-val">{fmtMoney(simStats.median, simStats.unit)}</div>
+            <div class="sim-kpi-sub">50th percentile outcome</div>
+          </div>
+          <div class="sim-kpi-card sim-bear">
+            <div class="sim-kpi-lbl">Bear Case (P5)</div>
+            <div class="sim-kpi-val bear">{fmtMoney(simStats.p5, simStats.unit)}</div>
+            <div class="sim-kpi-sub">5th percentile — worst 5% of outcomes</div>
+          </div>
+          <div class="sim-kpi-card sim-bull">
+            <div class="sim-kpi-lbl">Bull Case (P95)</div>
+            <div class="sim-kpi-val bull">{fmtMoney(simStats.p95, simStats.unit)}</div>
+            <div class="sim-kpi-sub">95th percentile — best 5% of outcomes</div>
+          </div>
+        </div>
+
+        <!-- Range bar -->
+        <div class="sim-range-wrap">
+          <span class="sim-range-lbl">Bear</span>
+          <div class="sim-range-bar">
+            <div class="sim-range-fill"></div>
+            <div class="sim-range-mid" title="Median"></div>
+          </div>
+          <span class="sim-range-lbl">Bull</span>
+          <span class="sim-range-legend">
+            {fmtMoney(simStats.p5, simStats.unit)} — {fmtMoney(simStats.p95, simStats.unit)}
+          </span>
+        </div>
+
+        <!-- Sim histogram -->
+        <div class="chart-card chart-full" style="margin-top:1rem">
+          <div class="chart-title">Simulation Distribution — {simStats.count} DCF outcomes (₹ Crores)</div>
+          <div class="chart-wrap"><canvas bind:this={canvasSim}></canvas></div>
+        </div>
+      </div>
+    {/if}
 
   {/if}
   <!-- ── end result ──────────────────────────────────────────────────── -->
@@ -1168,6 +1360,126 @@
   .cmp-tbl tr:nth-child(even) td { background: rgba(13, 20, 32, 0.5); }
   .cmp-metric { font-weight: 500; }
   .cmp-win { color: #4ade80 !important; font-weight: 700; }
+
+  /* ── Simulation section ─────────────────────────────────────────────── */
+  .sim-section {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #10192a;
+    animation: fadeUp 0.4s ease;
+  }
+
+  .sim-banner {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: linear-gradient(135deg, rgba(139,92,246,0.12), rgba(99,102,241,0.08));
+    border: 1px solid rgba(139,92,246,0.25);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .sim-icon { font-size: 1.75rem; line-height: 1; flex-shrink: 0; }
+
+  .sim-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #c4b5fd;
+    letter-spacing: -0.01em;
+  }
+
+  .sim-sub {
+    font-size: 0.76rem;
+    color: #5b4f7c;
+    margin-top: 0.2rem;
+  }
+
+  .sim-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .sim-kpi-card {
+    background: #0d1420;
+    border: 1px solid #10192a;
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+  }
+
+  .sim-bear { border-color: rgba(239,68,68,0.25); }
+  .sim-bull { border-color: rgba(74,222,128,0.25); }
+
+  .sim-kpi-lbl {
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #8b5cf6;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 0.4rem;
+  }
+
+  .sim-kpi-val {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #f0f4f8;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .sim-kpi-val.bear { color: #f87171; }
+  .sim-kpi-val.bull { color: #4ade80; }
+
+  .sim-kpi-sub {
+    font-size: 0.67rem;
+    color: #2d3a4a;
+    margin-top: 0.3rem;
+    line-height: 1.4;
+  }
+
+  .sim-range-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0;
+    margin-bottom: 0.25rem;
+  }
+
+  .sim-range-lbl {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .sim-range-bar {
+    flex: 1;
+    height: 8px;
+    background: linear-gradient(90deg, rgba(239,68,68,0.6), rgba(139,92,246,0.7), rgba(74,222,128,0.6));
+    border-radius: 4px;
+    position: relative;
+  }
+
+  .sim-range-mid {
+    position: absolute;
+    left: 50%;
+    top: -3px;
+    width: 2px;
+    height: 14px;
+    background: #c4b5fd;
+    border-radius: 2px;
+    transform: translateX(-50%);
+  }
+
+  .sim-range-legend {
+    font-size: 0.73rem;
+    color: #475569;
+    white-space: nowrap;
+    font-weight: 500;
+  }
 
   /* ── Animations ─────────────────────────────────────────────────────── */
   @keyframes fadeUp {
