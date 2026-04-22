@@ -9,6 +9,17 @@ from sklearn.linear_model import LinearRegression
 from backend.services.internal_universe import get_profile
 from backend.utils.loader import DataLoadError, load_csv, resolve_data_path
 
+try:
+    from backend.services.dynamic_valuation import compute_intrinsic_value as _compute_iv
+except Exception:  # pragma: no cover – keep engine functional even if yfinance is absent
+    def _compute_iv(mean, median, p10, p90, std):  # type: ignore[misc]
+        v_scenario = 0.20 * p10 + 0.60 * median + 0.20 * p90
+        denom = mean + std
+        alpha = 0.0 if denom == 0 else float(1 - (std / denom))
+        risk_adjustment = alpha * mean
+        iv = 0.30 * median + 0.30 * mean + 0.30 * v_scenario + 0.10 * risk_adjustment
+        return float(iv), float(alpha), float(v_scenario)
+
 
 def _safe_float(value: object, default: float = 0.0) -> float:
     try:
@@ -849,6 +860,13 @@ def build_internal_full_report(ticker: str, market: str) -> dict:
     p90 = float(monte_carlo["p90"])
     probability_undervalued = float(monte_carlo["probability_undervalued"] or 0.0)
 
+    # --- Hybrid Intrinsic Value ---
+    mc_mean = float(monte_carlo["mean"])
+    mc_std = float(monte_carlo["std_dev"])
+    iv, risk_alpha, v_scenario = _compute_iv(
+        mean=mc_mean, median=p50, p10=p10, p90=p90, std=mc_std
+    )
+
     summary = {
         "ticker": profile["ticker"],
         "sector": profile["sector"],
@@ -871,6 +889,12 @@ def build_internal_full_report(ticker: str, market: str) -> dict:
         "median_price_to_book": multiples.get("median_price_to_book"),
         "monte_carlo_iterations": int(monte_carlo["iterations"]),
         "unit": "INR",
+        # --- Hybrid IV (new keys, backward-compatible) ---
+        "intrinsic_value": float(iv),
+        "mean": float(mc_mean),
+        "median": float(p50),
+        "scenario_value": float(v_scenario),
+        "risk_alpha": float(risk_alpha),
     }
 
     risk_summary = [

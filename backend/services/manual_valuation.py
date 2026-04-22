@@ -6,6 +6,17 @@ import numpy as np
 
 from backend.schemas.responses import ManualValuationRequest
 
+try:
+    from backend.services.dynamic_valuation import compute_intrinsic_value as _compute_iv
+except Exception:  # pragma: no cover – fallback if yfinance absent
+    def _compute_iv(mean, median, p10, p90, std):  # type: ignore[misc]
+        v_scenario = 0.20 * p10 + 0.60 * median + 0.20 * p90
+        denom = mean + std
+        alpha = 0.0 if denom == 0 else float(1 - (std / denom))
+        risk_adjustment = alpha * mean
+        iv = 0.30 * median + 0.30 * mean + 0.30 * v_scenario + 0.10 * risk_adjustment
+        return float(iv), float(alpha), float(v_scenario)
+
 
 CRORE_DIVISOR = 1e7
 MANUAL_UNIT = "INR Crores"
@@ -712,6 +723,17 @@ def build_manual_report(inp: ManualValuationRequest) -> dict:
 
     mc = _run_mc(forecast, dynamic_wacc, terminal_growth, dcf_value)
 
+    # --- Hybrid Intrinsic Value ---
+    mc_mean = float(mc["mean"])
+    mc_std = float(mc["std_dev"])
+    iv, risk_alpha, v_scenario = _compute_iv(
+        mean=mc_mean,
+        median=float(mc["p50"]),
+        p10=float(mc["p10"]),
+        p90=float(mc["p90"]),
+        std=mc_std,
+    )
+
     multiples, multiples_value, selected_anchor = _compute_multiples(
         data=normalized,
         defaults=defaults,
@@ -763,6 +785,12 @@ def build_manual_report(inp: ManualValuationRequest) -> dict:
         "net_margin": float(drivers["net_margin"]),
         "debt_to_equity": float(_safe_div(normalized["debt"], normalized["equity"])),
         "monte_carlo_iterations": int(mc["iterations"]),
+        # --- Hybrid IV (new keys, backward-compatible) ---
+        "intrinsic_value": float(iv),
+        "mean": float(mc_mean),
+        "median": float(mc["p50"]),
+        "scenario_value": float(v_scenario),
+        "risk_alpha": float(risk_alpha),
     }
 
     signal = "HOLD"

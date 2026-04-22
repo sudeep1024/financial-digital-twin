@@ -141,6 +141,12 @@ class ValuationSummaryResponse(BaseModel):
     unit: Optional[str] = None
     input_quality_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     realism_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # --- Hybrid Intrinsic Value (new, backward-compatible) ---
+    intrinsic_value: Optional[float] = None
+    mean: Optional[float] = None
+    median: Optional[float] = None
+    scenario_value: Optional[float] = None
+    risk_alpha: Optional[float] = None
 
 
 class AISummary(BaseModel):

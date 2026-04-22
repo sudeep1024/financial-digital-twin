@@ -40,6 +40,32 @@ TERMINAL_GROWTH = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Hybrid Intrinsic Value formula
+# IV = w1*median + w2*mean + w3*scenario_value + w4*risk_adjustment
+# ---------------------------------------------------------------------------
+
+def compute_intrinsic_value(mean: float, median: float, p10: float, p90: float, std: float) -> tuple[float, float, float]:
+    """Compute Hybrid Intrinsic Value.
+
+    Returns (iv, alpha, v_scenario).
+    """
+    v_scenario = 0.20 * p10 + 0.60 * median + 0.20 * p90
+
+    denom = mean + std
+    alpha = 0.0 if denom == 0 else float(1 - (std / denom))
+    risk_adjustment = alpha * mean
+
+    w1, w2, w3, w4 = 0.30, 0.30, 0.30, 0.10
+    iv = (
+        w1 * median
+        + w2 * mean
+        + w3 * v_scenario
+        + w4 * risk_adjustment
+    )
+    return float(iv), float(alpha), float(v_scenario)
+
+
 def _safe_float(value, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -480,6 +506,13 @@ def _build_report(ticker: str, market: str) -> dict:
     p90 = float(mc_data["p90"])
     multiples_value = float(multiples_data["implied_value_ev_ebitda"])
 
+    # --- Hybrid Intrinsic Value ---
+    mc_mean = float(mc_data["mean"])
+    mc_std = float(mc_data["std_dev"])
+    iv, risk_alpha, v_scenario = compute_intrinsic_value(
+        mean=mc_mean, median=p50, p10=p10, p90=p90, std=mc_std
+    )
+
     upside_to_p50_pct = ((p50 / dcf_value) - 1) * 100 if dcf_value else 0.0
     upside_to_p90_pct = ((p90 / dcf_value) - 1) * 100 if dcf_value else 0.0
     downside_to_p10_pct = ((p10 / dcf_value) - 1) * 100 if dcf_value else 0.0
@@ -543,6 +576,12 @@ def _build_report(ticker: str, market: str) -> dict:
         "upside_to_p50_pct": float(upside_to_p50_pct),
         "upside_to_p90_pct": float(upside_to_p90_pct),
         "downside_to_p10_pct": float(downside_to_p10_pct),
+        # --- Hybrid IV (new keys, backward-compatible) ---
+        "intrinsic_value": float(iv),
+        "mean": float(mc_mean),
+        "median": float(p50),
+        "scenario_value": float(v_scenario),
+        "risk_alpha": float(risk_alpha),
     }
 
     risk_data = [
