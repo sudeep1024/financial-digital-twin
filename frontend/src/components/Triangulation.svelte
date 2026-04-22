@@ -6,10 +6,17 @@
   });
 
   let dcfVal = $derived(data?.dcf?.enterprise_value ?? 0);
-  let mcVal = $derived(data?.monte_carlo?.p50 ?? 0);
+  let mcVal  = $derived(data?.monte_carlo?.p50 ?? 0);
   let mltVal = $derived(data?.multiples?.implied_value_ev_ebitda ?? 0);
-  
-  let blendedValue = $derived((dcfVal * 0.4) + (mcVal * 0.3) + (mltVal * 0.3));
+
+  // Prefer backend hybrid IV; fall back to local triangulation
+  let localBlended  = $derived((dcfVal * 0.4) + (mcVal * 0.3) + (mltVal * 0.3));
+  let intrinsicValue = $derived(data?.summary?.intrinsic_value ?? localBlended);
+
+  // Optional new fields from backend
+  let mcMean      = $derived(data?.summary?.mean ?? null);
+  let scenarioVal = $derived(data?.summary?.scenario_value ?? null);
+  let riskAlpha   = $derived(data?.summary?.risk_alpha ?? null);
 </script>
 
 <section class="bg-zinc-950/40 p-8 md:p-12 rounded-[3.5rem] border border-zinc-900 relative overflow-hidden group shadow-2xl backdrop-blur-3xl">
@@ -18,12 +25,19 @@
   
   <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-16 relative z-10">
     <div class="space-y-3">
-      <div class="label-mono text-cyan-500">Blended Valuation Matrix</div>
+      <div class="label-mono text-cyan-500">Intrinsic Valuation Matrix</div>
       <h2 class="text-4xl font-black text-white tracking-tighter">Triangulated Fair Value</h2>
     </div>
     <div class="bg-black/80 border border-zinc-800 rounded-2xl p-6 px-10 text-right shadow-2xl">
-       <span class="label-mono opacity-50 block mb-2">Final Weighted Target</span>
-       <span class="text-6xl font-black text-premium tracking-tighter">{formatter.format(blendedValue)}</span>
+       <span class="label-mono opacity-50 block mb-2">Hybrid Intrinsic Value</span>
+       <span class="text-6xl font-black text-premium tracking-tighter">{formatter.format(intrinsicValue)}</span>
+       <span class="label-mono text-[9px] text-zinc-600 block mt-2 uppercase tracking-widest">Probabilistic hybrid valuation</span>
+       {#if mcMean !== null}
+         <span class="label-mono text-[9px] text-zinc-500 block mt-1">MC Mean: {formatter.format(mcMean)}</span>
+       {/if}
+       {#if scenarioVal !== null}
+         <span class="label-mono text-[9px] text-zinc-500 block mt-1">Scenario: {formatter.format(scenarioVal)}</span>
+       {/if}
     </div>
   </div>
 

@@ -6,7 +6,7 @@
 
   export let dcf = 0;
   export let multiples = 0;
-  export let blended = 0;
+  export let intrinsicValue = 0;
   export let p10 = 0;
   export let p50 = 0;
   export let p90 = 0;
@@ -28,10 +28,10 @@
     chart = new Chart(canvas, {
       type: 'bar',
       data: {
-        labels: ['DCF', 'Multiples', 'Blended', 'P10', 'P50', 'P90'],
+        labels: ['DCF', 'Multiples', 'Intrinsic', 'P10', 'P50', 'P90'],
         datasets: [
           {
-            data: [dcf, multiples, blended, p10, p50, p90].map((v) => Number(v) / divisor),
+            data: [dcf, multiples, intrinsicValue, p10, p50, p90].map((v) => Number(v) / divisor),
             backgroundColor: [
               'rgba(13, 110, 253, 0.75)',
               'rgba(108, 117, 125, 0.75)',

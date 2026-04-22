@@ -309,10 +309,11 @@
     chartVal = new Chart(canvasVal, {
       type: "bar",
       data: {
-        labels: ["DCF", "Multiples", "Blended", "P10", "P50", "P90"],
+        labels: ["DCF", "Multiples", "Intrinsic", "P10", "P50", "P90"],
         datasets: [{
           data: [
-            r.summary.dcf_value, r.summary.multiples_value, r.summary.blended_value,
+            r.summary.dcf_value, r.summary.multiples_value,
+            r.summary.intrinsic_value ?? r.summary.blended_value,
             r.summary.p10, r.summary.p50, r.summary.p90,
           ].map(v => Number(v) / d),
           backgroundColor: [
@@ -404,8 +405,8 @@
     chartCmp?.destroy();
     if (!canvasCmp || !rA?.summary || !rB?.summary) return;
     const u = rA.summary.unit || "INR", d = getDiv(u), a = getAx(u);
-    const labels = ["DCF", "Multiples", "Blended", "P10", "P50", "P90"];
-    const extract = r => [r.summary.dcf_value, r.summary.multiples_value, r.summary.blended_value, r.summary.p10, r.summary.p50, r.summary.p90].map(v => Number(v) / d);
+    const labels = ["DCF", "Multiples", "Intrinsic", "P10", "P50", "P90"];
+    const extract = r => [r.summary.dcf_value, r.summary.multiples_value, r.summary.intrinsic_value ?? r.summary.blended_value, r.summary.p10, r.summary.p50, r.summary.p90].map(v => Number(v) / d);
     chartCmp = new Chart(canvasCmp, {
       type: "bar",
       data: {
@@ -527,9 +528,9 @@
     <!-- ── KPI Cards ─────────────────────────────────────────────────── -->
     <div class="kpi-row">
       <div class="kpi-card">
-        <div class="kpi-lbl">Blended Value</div>
-        <div class="kpi-val">{fmtMoney(result.summary?.blended_value, result.summary?.unit)}</div>
-        <div class="kpi-sub">Triangulated estimate</div>
+        <div class="kpi-lbl">Intrinsic Value</div>
+        <div class="kpi-val">{fmtMoney(result.summary?.intrinsic_value ?? result.summary?.blended_value, result.summary?.unit)}</div>
+        <div class="kpi-sub">Probabilistic hybrid valuation</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-lbl">DCF Value</div>
@@ -632,7 +633,7 @@
     <div class="section-title">📊 Valuation Analysis</div>
     <div class="charts-grid">
       <div class="chart-card chart-full">
-        <div class="chart-title">Valuation Breakdown — DCF · Multiples · Blended · P10/50/90</div>
+        <div class="chart-title">Valuation Breakdown — DCF · Multiples · Intrinsic · P10/50/90</div>
         <div class="chart-wrap"><canvas bind:this={canvasVal}></canvas></div>
       </div>
       {#if result.fcf_forecast?.length}
@@ -790,7 +791,7 @@
             </thead>
             <tbody>
               {#each [
-                { label: "Blended Value",  a: result.summary?.blended_value,      b: resultB.summary?.blended_value,      fmt: v => fmtMoney(v, result.summary?.unit) },
+                { label: "Intrinsic Value", a: result.summary?.intrinsic_value ?? result.summary?.blended_value, b: resultB.summary?.intrinsic_value ?? resultB.summary?.blended_value, fmt: v => fmtMoney(v, result.summary?.unit) },
                 { label: "DCF Value",      a: result.summary?.dcf_value,          b: resultB.summary?.dcf_value,          fmt: v => fmtMoney(v, result.summary?.unit) },
                 { label: "P50 (Median)",   a: result.summary?.p50,                b: resultB.summary?.p50,                fmt: v => fmtMoney(v, result.summary?.unit) },
                 { label: "Upside (P90 %)", a: result.summary?.upside_to_p90_pct,  b: resultB.summary?.upside_to_p90_pct,  fmt: fmtPct },
